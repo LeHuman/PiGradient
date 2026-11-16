@@ -118,6 +118,7 @@ export interface SystemStats {
   storageStatus?: 'ok' | 'degraded' | 'error';
   lastWriteError?: string;
   droppedRecords?: number;
+  queuedRecords?: number;
   diskFreeBytes?: number;
 }
 

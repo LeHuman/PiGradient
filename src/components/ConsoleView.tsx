@@ -346,7 +346,9 @@ export const ConsoleView: React.FC<ConsoleViewProps> = ({
       }
       setLiveBuffer((prev) => {
         const last = prev[prev.length - 1];
-        if (last && last.timestamp === telemetry.timestamp) return prev;
+        // >= (not ===): drop stale/cached frames that are older than the tail —
+        // e.g. telemetry that arrives after switching back to the 5m preset
+        if (last && last.timestamp >= telemetry.timestamp) return prev;
         const newPoint: HistoricalPoint = {
           timestamp: telemetry.timestamp,
           pm01: telemetry.raw.pm01,
@@ -1151,27 +1153,26 @@ export const ConsoleView: React.FC<ConsoleViewProps> = ({
   };
 
   // Raw archive export: stream the full-fidelity 14-column raw sensor archive
-  // for the active window from the gateway (fetch+blob keeps loading UX and
-  // error handling consistent with the chart CSV above)
-  const handleExportRawCsv = async () => {
+  // for the active window straight from the gateway via a download anchor —
+  // the browser streams the Content-Disposition response to disk without
+  // buffering the whole CSV in memory
+  const handleExportRawCsv = () => {
     if (activeData.length === 0 || isExportingRaw) return;
     setIsExportingRaw(true);
     try {
-      const rangeStart = activeData[0].timestamp;
-      const rangeEnd = activeData[activeData.length - 1].timestamp;
-      const res = await fetch(
-        `${import.meta.env.BASE_URL}api/v1/export.csv?start=${rangeStart}&end=${rangeEnd}`
-      );
-      if (!res.ok) return;
-      const blob = await res.blob();
-      const url = URL.createObjectURL(blob);
+      // Live view (5m): export up to "now". Historical presets: cover the full
+      // requested window — the newest bucket's start timestamp alone would
+      // truncate up to interval-1 seconds (or everything with one bucket).
+      const rangeEnd = isLiveStreaming
+        ? Math.floor(Date.now() / 1000)
+        : activeData[activeData.length - 1].timestamp + RANGE_INTERVAL_SEC[rangePreset] - 1;
+      const rangeStart = isLiveStreaming
+        ? rangeEnd - RANGE_WINDOW_SEC[rangePreset]
+        : activeData[0].timestamp;
       const a = document.createElement('a');
-      a.href = url;
+      a.href = `${import.meta.env.BASE_URL}api/v1/export.csv?start=${rangeStart}&end=${rangeEnd}`;
       a.download = `pigradient_raw_${rangeStart}-${rangeEnd}.csv`;
       a.click();
-      URL.revokeObjectURL(url);
-    } catch {
-      // Transient export failure — keep the chart CSV available as fallback
     } finally {
       setIsExportingRaw(false);
     }

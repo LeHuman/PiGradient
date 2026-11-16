@@ -22,6 +22,11 @@ const (
 	// temporarily fails (~2.4 MB of RAM) instead of dropping history early.
 	maxRetryBuffer = 21600
 
+	// flushChunkSize bounds each recordBatch transaction during a flush so
+	// even a full retry buffer commits in well-under-5s slices on slow USB
+	// storage instead of rolling back wholesale on a single timeout.
+	flushChunkSize = 2000
+
 	// checkpointInterval is how often the writer forces a WAL TRUNCATE
 	// checkpoint even when flushes are not happening.
 	checkpointInterval = 15 * time.Minute
@@ -56,9 +61,12 @@ func dbDSN(path string) string {
 }
 
 // readOnlyDSN opens an existing partition for history/export queries without
-// any chance of mutating it (mode=ro + query_only).
+// any chance of mutating it (mode=ro + query_only). The file: URI prefix is
+// required: modernc.org/sqlite only honors URI parameters (and SQLITE_OPEN_READONLY)
+// for file: DSNs; a bare path would silently open READWRITE|CREATE, letting a
+// history query touch closed partitions (-wal/-shm churn).
 func readOnlyDSN(path string) string {
-	return path + "?_pragma=mode(ro)&_pragma=busy_timeout(3000)&_pragma=query_only(1)"
+	return "file:" + filepath.ToSlash(path) + "?mode=ro&_pragma=busy_timeout(3000)&_pragma=query_only(1)"
 }
 
 // storageStats is a mutex-guarded snapshot decoupled from sm.mu so GetStats /
@@ -408,19 +416,44 @@ func (sm *StorageManager) StartWriter(ctx context.Context, inChan <-chan collect
 		if len(buffer) == 0 {
 			return
 		}
-		writeCtx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
-		err := sm.recordBatch(writeCtx, buffer)
-		cancel()
-		if err != nil {
+		// Flush in bounded chunks: a full 21600-row retry buffer cannot commit
+		// inside a single 5s transaction on slow USB storage (upserts plus a
+		// possible month rotation), so it would roll back whole every tick and
+		// livelock. Each chunk gets its own fresh 5s timeout; loop until the
+		// buffer is drained or a chunk fails.
+		flushed := 0
+		var flushErr error
+		for flushed < len(buffer) {
+			end := flushed + flushChunkSize
+			if end > len(buffer) {
+				end = len(buffer)
+			}
+			writeCtx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+			err := sm.recordBatch(writeCtx, buffer[flushed:end])
+			cancel()
+			if err != nil {
+				flushErr = err
+				break
+			}
+			flushed = end
+		}
+		if flushErr != nil {
 			healthy = false
 			failing = true
 			// Rate limit: first error of a failure run immediately, then at
 			// most one line per minute while the outage continues.
 			if lastErrLog.IsZero() || time.Since(lastErrLog) >= time.Minute {
-				logger.Error("Store", "Batch insert error (retaining %d queued records): %v", len(buffer), err)
+				logger.Error("Store", "Batch insert error (retaining %d queued records): %v", len(buffer)-flushed, flushErr)
 				lastErrLog = time.Now()
 			}
-			sm.recordWriteError(err)
+			sm.recordWriteError(flushErr)
+			// Keep only the un-flushed remainder for retry (chunks that
+			// already committed are done), then trim to the retry cap,
+			// dropping the oldest samples on overflow.
+			if flushed > 0 {
+				copy(buffer, buffer[flushed:])
+				buffer = buffer[:len(buffer)-flushed]
+			}
 			if len(buffer) > maxRetryBuffer {
 				dropped := len(buffer) - maxRetryBuffer
 				copy(buffer, buffer[dropped:])

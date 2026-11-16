@@ -5,9 +5,13 @@ import {defineConfig} from 'vite';
 
 export default defineConfig(() => {
   return {
-    // Fixed deploy base: the Go daemon serves the dashboard under /pigradient
-    // (and still at /). Dev server therefore serves http://localhost:3000/pigradient/
-    base: '/pigradient/',
+    // Relative asset base: the bundle resolves assets and API calls relative to
+    // the URL it is served from, so the Go daemon can serve the dashboard at /
+    // (its default base_path) or under any configured prefix (e.g. /pigradient
+    // behind a reverse proxy) with the same build. Production
+    // import.meta.env.BASE_URL is './' (→ ./assets/..., ./api/v1/...); the dev
+    // server serves at / so BASE_URL is '/'.
+    base: './',
     plugins: [react(), tailwindcss()],
     resolve: {
       alias: {
@@ -15,18 +19,13 @@ export default defineConfig(() => {
       },
     },
     server: {
+      // Vite docs default; keep the dev server port predictable.
+      port: 3000,
       // Dev-only: proxy API calls (REST + SSE) to the Go daemon.
       // Run `go run ./server/cmd/pigradient` alongside `npm run dev`.
+      // The daemon serves root-relative routes (and any base_path prefix), so
+      // a plain /api proxy is all the dev server needs.
       proxy: {
-        // App built with base '/pigradient/' — Vite dev serves it at /pigradient/;
-        // proxy the prefixed API path to the daemon, stripping the prefix so it
-        // hits the root routes (the daemon serves both, either is fine)
-        '^/pigradient/api': {
-          target: 'http://localhost:8080',
-          changeOrigin: true,
-          rewrite: (p) => p.replace(/^\/pigradient/, ''),
-        },
-        // Legacy root-relative API path (kept for tools/curl during dev)
         '/api': {
           target: 'http://localhost:8080',
           changeOrigin: true,

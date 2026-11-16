@@ -96,10 +96,11 @@ sudo journalctl -u pigradient -f
 
 Open `http://<raspberry-pi-ip>:8080` (or `http://raspberrypi.local:8080`) from any browser on your local network.
 
-**Reverse proxy (recommended when the Pi hosts multiple services)**: use **Caddy** as the standard front door — it owns ports 80/443, routes by path or hostname, gets auto-HTTPS, and flushes SSE streams with no extra config. Set `base_path: "/pigradient"` in `/etc/pigradient/config.yaml` (root serving keeps working either way) and keep the `/pigradient` prefix end-to-end (no stripping — the frontend is built with Vite `base: '/pigradient/'`):
+**Reverse proxy (recommended when the Pi hosts multiple services)**: use **Caddy** as the standard front door — it owns ports 80/443, routes by path or hostname, gets auto-HTTPS, and flushes SSE streams with no extra config. Set `base_path: "/pigradient"` in `/etc/pigradient/config.yaml` (root serving keeps working either way) and keep the `/pigradient` prefix end-to-end (no stripping — the frontend is built with a relative Vite base, so it works under any prefix):
 
 ```
 pidev {
+    redir /pigradient /pigradient/ 308
     handle /pigradient/* {
         reverse_proxy 127.0.0.1:8080
     }

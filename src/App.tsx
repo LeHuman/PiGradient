@@ -53,7 +53,12 @@ function AppShell() {
       if (liveRes.ok) {
         const liveData = await liveRes.json();
         setTelemetry(liveData);
-        lastTelemetryAtRef.current = Date.now();
+        // Anchor to the sample's reported age, not arrival time: a cached
+        // /api/v1/live payload can already be seconds old
+        lastTelemetryAtRef.current =
+          liveData.last_seen_seconds_ago >= 0
+            ? Date.now() - liveData.last_seen_seconds_ago * 1000
+            : Date.now();
       }
       if (sysRes.ok) {
         const sysData = await sysRes.json();
@@ -84,7 +89,12 @@ function AppShell() {
         try {
           const data: LiveTelemetryPayload = JSON.parse(event.data);
           setTelemetry(data);
-          lastTelemetryAtRef.current = Date.now();
+          // Anchor to the sample's reported age: status broadcasts re-sent
+          // during monitor outages must not reset the staleness watchdog
+          lastTelemetryAtRef.current =
+            data.last_seen_seconds_ago >= 0
+              ? Date.now() - data.last_seen_seconds_ago * 1000
+              : Date.now();
           setIsStreamConnected(true);
         } catch {
           // Ignore malformed SSE frame

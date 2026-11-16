@@ -19,7 +19,7 @@ Your task is to build the **PiGradient Companion Android App** featuring:
 
 ## 2. PiGradient Backend API Contract (Already Implemented on Gateway)
 
-Base URL is user-configured (default port `8080` on Raspberry Pi, or `3000` when testing against PiGradient's Node dev server). All JSON endpoints set CORS `*` and return `application/json`.
+Base URL is user-configured (default port `8080` on Raspberry Pi, or `http://localhost:8080` when testing against the Go daemon via `go run ./server/cmd/pigradient`). All JSON endpoints set CORS `*` and return `application/json`.
 
 ### A. `GET /api/v1/widget` (Primary Lightweight Widget Endpoint)
 ```json

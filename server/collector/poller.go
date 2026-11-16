@@ -198,6 +198,9 @@ func (c *Collector) Start(ctx context.Context) {
 					logger.Warn("Collector", "Transitioned to DEGRADED backoff state (5s cadence): %s", errMsg)
 				} else if fails == 10 {
 					logger.Error("Collector", "Transitioned to OFFLINE backoff state (15s cadence): %s", errMsg)
+					// Degraded -> offline transition: ping UIs immediately
+					// instead of waiting for the next 30s re-assert.
+					c.notifyStatusChange()
 				}
 
 				if fails >= 10 {

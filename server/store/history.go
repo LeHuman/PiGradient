@@ -173,16 +173,17 @@ func QueryHistoricalBuckets(ctx context.Context, baseDir string, start, end int6
 			return combined[i].Timestamp < combined[j].Timestamp
 		})
 	}
-	mergeDuplicateBuckets(combined)
+	combined = mergeDuplicateBuckets(combined)
 	if combined == nil {
 		combined = []HistoricalPoint{}
 	}
 	return combined, nil
 }
 
-// mergeDuplicateBuckets averages adjacent rows sharing a Timestamp. Such
-// duplicates only occur when a bucket straddles a monthly partition seam.
-func mergeDuplicateBuckets(points []HistoricalPoint) {
+// mergeDuplicateBuckets averages adjacent rows sharing a Timestamp and
+// returns the compacted slice. Such duplicates only occur when a bucket
+// straddles a monthly partition seam.
+func mergeDuplicateBuckets(points []HistoricalPoint) []HistoricalPoint {
 	out := points[:0]
 	for i, p := range points {
 		if i > 0 && p.Timestamp == out[len(out)-1].Timestamp {
@@ -199,6 +200,7 @@ func mergeDuplicateBuckets(points []HistoricalPoint) {
 		}
 		out = append(out, p)
 	}
+	return out
 }
 
 // StreamHistoricalRows feeds every matching raw (interval==1) or

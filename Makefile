@@ -57,4 +57,4 @@ test:
 	go test -v ./server/...
 
 clean:
-	rm -rf bin/ pkg/ dist/ dist-deb/ dashboard/dist/
+	rm -rf bin/ pkg/ dist/ dist-deb/ dashboard/dist/*
