@@ -1,0 +1,30 @@
+#!/bin/sh
+set -e
+
+# Create dedicated system group and user if missing
+if ! getent group pigradient >/dev/null 2>&1; then
+    groupadd --system pigradient
+fi
+if ! id -u pigradient >/dev/null 2>&1; then
+    useradd --system --gid pigradient --no-create-home --shell /usr/sbin/nologin pigradient
+fi
+
+# Ensure runtime directories exist with least-privilege ownership
+mkdir -p /etc/pigradient /mnt/usb/pigradient /var/log/pigradient
+chown -R pigradient:pigradient /mnt/usb/pigradient /var/log/pigradient /etc/pigradient
+chmod 755 /usr/local/bin/pigradient
+
+# Reload systemd and enable service on target hosts
+if [ -d /run/systemd/system ]; then
+    systemctl daemon-reload
+    systemctl enable pigradient.service
+    systemctl restart pigradient.service || true
+fi
+
+echo "=========================================================="
+echo "PiGradient installed successfully!"
+echo "Dashboard listening on: http://localhost:8080"
+echo "Configure target device: /etc/pigradient/config.yaml"
+echo "Check daemon logs: journalctl -u pigradient -f"
+echo "=========================================================="
+exit 0

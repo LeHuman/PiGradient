@@ -1,0 +1,9 @@
+# PiGradient Local AirGradient Gateway Configuration
+# Accepts LAN IP ("http://192.168.1.150") or mDNS ("http://airgradient_<serial>.local")
+target_device_url: "http://192.168.1.150"
+poll_interval_seconds: 1
+listen_address: ":8080"
+
+# Monthly partitioned SQLite archive directory (USB flash drive or SD card path)
+# Also stores schedule.json (Day/Night dimming presets) and runtime.json (UI target IP overrides)
+storage_directory: "/mnt/usb/pigradient"

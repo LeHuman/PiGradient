@@ -1,0 +1,20 @@
+[Unit]
+Description=PiGradient Local Analytics Logger and Gateway
+Documentation=https://github.com/pigradient/pigradient
+After=network-online.target local-fs.target
+Wants=network-online.target
+
+[Service]
+Type=simple
+User=pigradient
+Group=pigradient
+WorkingDirectory=/etc/pigradient
+ExecStart=/usr/local/bin/pigradient -config=/etc/pigradient/config.yaml
+Restart=always
+RestartSec=5
+StandardOutput=journal
+StandardError=journal
+LimitNOFILE=65536
+
+[Install]
+WantedBy=multi-user.target

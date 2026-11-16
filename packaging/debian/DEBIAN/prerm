@@ -1,0 +1,9 @@
+#!/bin/sh
+set -e
+
+if [ -d /run/systemd/system ]; then
+    systemctl stop pigradient.service || true
+    systemctl disable pigradient.service || true
+fi
+
+exit 0

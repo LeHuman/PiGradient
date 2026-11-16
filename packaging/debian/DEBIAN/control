@@ -1,0 +1,11 @@
+Package: pigradient
+Version: {{VERSION}}
+Section: utils
+Priority: optional
+Architecture: {{ARCH}}
+Maintainer: PiGradient Maintainers <support@pigradient.local>
+Recommends: avahi-daemon
+Description: Local AirGradient Gateway, Lossless SQLite Logger & Web Dashboard
+ Standalone daemon for Raspberry Pi providing air-gapped 1-second telemetry
+ ingestion, monthly partitioned SQLite archiving on flash media, EPA AQI
+ processing, and real-time SSE streaming for AirGradient ONE monitors.

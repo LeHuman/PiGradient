@@ -1,0 +1,13 @@
+node_modules/
+build/
+dist/
+dist-deb/
+coverage/
+pkg/
+bin/
+.aistudio/
+dashboard/dist/*
+!dashboard/dist/.gitkeep
+.DS_Store
+*.log
+.env*

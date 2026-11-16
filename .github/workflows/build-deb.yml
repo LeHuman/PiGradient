@@ -1,0 +1,138 @@
+name: Build Debian Package
+
+on:
+  push:
+    tags:
+      - 'v*'
+    branches:
+      - main
+  pull_request:
+    branches:
+      - main
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  build-deb:
+    name: Build .deb (${{ matrix.debarch }})
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+    strategy:
+      matrix:
+        include:
+          - goarch: arm64
+            debarch: arm64
+          - goarch: arm
+            goarm: 7
+            debarch: armhf
+          - goarch: amd64
+            debarch: amd64
+
+    steps:
+      - name: Checkout Code
+        uses: actions/checkout@v4
+
+      - name: Setup Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+
+      - name: Install Frontend Dependencies & Lint
+        run: |
+          npm install --no-audit --no-fund
+          npm run lint
+
+      - name: Build Dashboard Assets
+        run: |
+          npm run build
+          mkdir -p dashboard/dist
+          rm -rf dashboard/dist/*
+          cp -r dist/* dashboard/dist/
+
+      - name: Setup Go
+        uses: actions/setup-go@v5
+        with:
+          go-version: '1.22'
+          cache: true
+
+      - name: Resolve Go Dependencies & Run Tests
+        run: |
+          go mod tidy
+          go test -v ./server/...
+
+      - name: Determine Package Version
+        id: version
+        run: |
+          RAW_VER="${GITHUB_REF_NAME#v}"
+          if echo "$RAW_VER" | grep -Eq '^[0-9]+\.[0-9]+(\.[0-9]+)?([~+-][0-9A-Za-z.+-]+)?$'; then
+            PKG_VER="$RAW_VER"
+          else
+            PKG_VER="1.0.0-snapshot.${GITHUB_RUN_NUMBER:-0}"
+          fi
+          echo "pkg_version=$PKG_VER" >> "$GITHUB_OUTPUT"
+
+      - name: Build Standalone Daemon Binary
+        env:
+          CGO_ENABLED: '0'
+          GOOS: linux
+          GOARCH: ${{ matrix.goarch }}
+          GOARM: ${{ matrix.goarm }}
+        run: |
+          mkdir -p bin/
+          go build -ldflags="-s -w -X main.Version=${{ steps.version.outputs.pkg_version }}" -o bin/pigradient ./server/cmd/pigradient
+
+      - name: Assemble & Verify Debian Package
+        run: |
+          VERSION="${{ steps.version.outputs.pkg_version }}"
+          PKG_DIR="pkg/pigradient_${VERSION}_${{ matrix.debarch }}"
+
+          rm -rf "$PKG_DIR"
+          mkdir -p "$PKG_DIR/DEBIAN"
+          mkdir -p "$PKG_DIR/usr/local/bin"
+          mkdir -p "$PKG_DIR/etc/pigradient"
+          mkdir -p "$PKG_DIR/etc/systemd/system"
+          mkdir -p "$PKG_DIR/var/log/pigradient"
+          mkdir -p "$PKG_DIR/mnt/usb/pigradient"
+
+          cp bin/pigradient "$PKG_DIR/usr/local/bin/pigradient"
+          cp packaging/config.yaml "$PKG_DIR/etc/pigradient/config.yaml"
+          cp packaging/pigradient.service "$PKG_DIR/etc/systemd/system/pigradient.service"
+
+          sed -e "s/{{ARCH}}/${{ matrix.debarch }}/g" \
+              -e "s/{{VERSION}}/$VERSION/g" \
+              packaging/debian/DEBIAN/control > "$PKG_DIR/DEBIAN/control"
+
+          cp packaging/debian/DEBIAN/conffiles "$PKG_DIR/DEBIAN/conffiles"
+          cp packaging/debian/DEBIAN/postinst "$PKG_DIR/DEBIAN/postinst"
+          cp packaging/debian/DEBIAN/prerm "$PKG_DIR/DEBIAN/prerm"
+
+          chmod 644 "$PKG_DIR/etc/pigradient/config.yaml" \
+                    "$PKG_DIR/etc/systemd/system/pigradient.service" \
+                    "$PKG_DIR/DEBIAN/control" \
+                    "$PKG_DIR/DEBIAN/conffiles"
+          chmod 755 "$PKG_DIR/usr/local/bin/pigradient" \
+                    "$PKG_DIR/DEBIAN/postinst" \
+                    "$PKG_DIR/DEBIAN/prerm"
+
+          dpkg-deb --root-owner-group --build "$PKG_DIR"
+          mkdir -p dist-deb/
+          DEB_PATH="dist-deb/pigradient_${VERSION}_${{ matrix.debarch }}.deb"
+          mv "pkg/pigradient_${VERSION}_${{ matrix.debarch }}.deb" "$DEB_PATH"
+
+          dpkg-deb --info "$DEB_PATH"
+          dpkg-deb --contents "$DEB_PATH"
+
+      - name: Upload Debian Package Artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: pigradient-${{ matrix.debarch }}-deb
+          path: dist-deb/*.deb
+
+      - name: Release Asset (On Tagged Release)
+        if: startsWith(github.ref, 'refs/tags/v')
+        uses: softprops/action-gh-release@v2
+        with:
+          files: dist-deb/*.deb

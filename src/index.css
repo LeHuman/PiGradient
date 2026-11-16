@@ -1,0 +1,97 @@
+@import "tailwindcss";
+
+@import "@fontsource-variable/dm-sans";
+@import "@fontsource-variable/jetbrains-mono";
+@import "@fontsource-variable/plus-jakarta-sans";
+
+@custom-variant dark (&:where(.dark, .dark *));
+
+:root {
+  font-family: 'DM Sans', -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif;
+  color-scheme: dark;
+}
+
+h1, h2, h3, h4, .font-display {
+  font-family: 'Plus Jakarta Sans', -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif;
+}
+
+code, pre, .font-mono, .tabular-nums {
+  font-family: 'JetBrains Mono', monospace;
+  font-variant-numeric: tabular-nums;
+}
+
+/* Material Design 3 Scrollbars */
+::-webkit-scrollbar {
+  width: 6px;
+  height: 6px;
+}
+::-webkit-scrollbar-track {
+  background: #111318;
+}
+::-webkit-scrollbar-thumb {
+  background: rgba(148, 163, 184, 0.25);
+  border-radius: 3px;
+}
+::-webkit-scrollbar-thumb:hover {
+  background: rgba(148, 163, 184, 0.45);
+}
+
+@media (prefers-reduced-motion: reduce) {
+  *, *::before, *::after {
+    animation-duration: 0.01ms !important;
+    animation-iteration-count: 1 !important;
+    transition-duration: 0.01ms !important;
+    scroll-behavior: auto !important;
+  }
+}
+
+html.a11y-large-text {
+  font-size: 112.5%;
+}
+
+body.a11y-reduce-motion *,
+body.a11y-reduce-motion *::before,
+body.a11y-reduce-motion *::after {
+  animation-duration: 0.01ms !important;
+  animation-iteration-count: 1 !important;
+  transition-duration: 0.01ms !important;
+  scroll-behavior: auto !important;
+}
+
+body.a11y-high-contrast {
+  background-color: #05070a;
+  color: #ffffff;
+}
+
+body.a11y-high-contrast header,
+body.a11y-high-contrast footer {
+  background-color: #0b0e14 !important;
+  border-color: rgba(255, 255, 255, 0.28) !important;
+}
+
+body.a11y-high-contrast [class*="bg-[#181b22]"],
+body.a11y-high-contrast [class*="bg-[#1d2129]"],
+body.a11y-high-contrast [class*="bg-[#191c23]"] {
+  background-color: #10141c !important;
+  border-color: rgba(255, 255, 255, 0.34) !important;
+}
+
+body.a11y-high-contrast [class*="text-[#8f96a6]"],
+body.a11y-high-contrast [class*="text-[#9ca3af]"],
+body.a11y-high-contrast [class*="text-[#7e8596]"] {
+  color: #cbd5e1 !important;
+}
+
+body.a11y-high-contrast *:focus-visible {
+  outline: 3px solid #93c5fd !important;
+  outline-offset: 2px !important;
+}
+
+.no-scrollbar {
+  scrollbar-width: none;
+  -ms-overflow-style: none;
+}
+.no-scrollbar::-webkit-scrollbar {
+  display: none;
+}
+
