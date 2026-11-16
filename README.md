@@ -40,7 +40,7 @@ pigradient/
 
 ### 1. Build the `.deb` or Standalone Binary
 
-From a Linux/macOS host with Node.js 20+ and Go 1.22+:
+From a Linux/macOS host with Node.js 22+ and Go 1.22+:
 
 ```bash
 # Build ARM64 Raspberry Pi binary (embeds Vite frontend automatically)
@@ -57,6 +57,12 @@ scp bin/pigradient_1.0.0_arm64.deb pi@raspberrypi.local:~
 
 ```bash
 sudo dpkg -i pigradient_1.0.0_arm64.deb
+
+# The installer no longer creates the storage directory (the drive may be
+# unmounted or FAT-formatted at install time) — mount the USB drive and
+# grant the daemon access:
+sudo mkdir -p /mnt/usb/pigradient
+sudo chown -R pigradient:pigradient /mnt/usb/pigradient
 
 # Point PiGradient at your AirGradient monitor's LAN IP or mDNS hostname
 sudo nano /etc/pigradient/config.yaml
@@ -80,9 +86,35 @@ sudo systemctl restart pigradient
 sudo journalctl -u pigradient -f
 ```
 
+### Storage & Cloud Sync
+
+- **Mount**: Use an **ext4** USB drive at `/mnt/usb` via `/etc/fstab` (`defaults,noatime,nofail`) — FAT lacks ownership/permission bits. The service declares `RequiresMountsFor=/mnt/usb`, so it waits for the drive instead of silently falling back to the microSD.
+- **Ownership (manual, post-install)**: `sudo mkdir -p /mnt/usb/pigradient && sudo chown -R pigradient:pigradient /mnt/usb/pigradient` — the `.deb` no longer creates or chowns it at install time.
+- **Sync agent**: point the cloud-sync agent running on the Pi at `/mnt/usb/pigradient` **one-way (send-only)** and **exclude** `*.db-wal`, `*.db-shm`, `*.db-journal`, and `*.tmp*`. The daemon runs explicit 15-minute WAL checkpoints so `.db` files are stable between checkpoints — but the sidecars must never be synced, and one-way sync prevents the agent overwriting an open database and corrupting it.
+
 ### 3. Access on Your LAN
 
 Open `http://<raspberry-pi-ip>:8080` (or `http://raspberrypi.local:8080`) from any browser on your local network.
+
+**Reverse proxy (recommended when the Pi hosts multiple services)**: use **Caddy** as the standard front door — it owns ports 80/443, routes by path or hostname, gets auto-HTTPS, and flushes SSE streams with no extra config. Set `base_path: "/pigradient"` in `/etc/pigradient/config.yaml` (root serving keeps working either way) and keep the `/pigradient` prefix end-to-end (no stripping — the frontend is built with Vite `base: '/pigradient/'`):
+
+```
+pidev {
+    handle /pigradient/* {
+        reverse_proxy 127.0.0.1:8080
+    }
+    # other services follow the same pattern
+}
+```
+
+```nginx
+# nginx alternative — SSE requires proxy_buffering off + a long read timeout
+location /pigradient/ {
+  proxy_pass http://127.0.0.1:8080;
+  proxy_buffering off;
+  proxy_read_timeout 3600;
+}
+```
 
 ---
 

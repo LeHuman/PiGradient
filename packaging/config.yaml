@@ -7,3 +7,8 @@ listen_address: ":8080"
 # Monthly partitioned SQLite archive directory (USB flash drive or SD card path)
 # Also stores schedule.json (Day/Night dimming presets) and runtime.json (UI target IP overrides)
 storage_directory: "/mnt/usb/pigradient"
+
+# Optional subpath for the dashboard and all /api/v1/* routes ("" = serve at root only).
+# Set to "/pigradient" to also serve at http://<host>:8080/pigradient/ — root serving
+# keeps working either way (useful behind a reverse proxy).
+base_path: ""

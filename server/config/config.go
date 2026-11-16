@@ -18,6 +18,7 @@ type AppConfig struct {
 	PollIntervalSeconds int    `yaml:"poll_interval_seconds"`
 	ListenAddress       string `yaml:"listen_address"`
 	StorageDirectory    string `yaml:"storage_directory"`
+	BasePath            string `yaml:"base_path"`
 }
 
 func Default() AppConfig {
@@ -26,7 +27,19 @@ func Default() AppConfig {
 		PollIntervalSeconds: 1,
 		ListenAddress:       ":8080",
 		StorageDirectory:    "/mnt/usb/pigradient",
+		BasePath:            "",
 	}
+}
+
+// NormalizeBasePath canonicalizes the optional reverse-proxy/dashboard base
+// path: surrounding whitespace and slashes are stripped and the result is kept
+// in "/pigradient" form (empty string means serve at the root only).
+func NormalizeBasePath(raw string) string {
+	cleaned := strings.Trim(strings.TrimSpace(raw), "/")
+	if cleaned == "" {
+		return ""
+	}
+	return "/" + cleaned
 }
 
 // AtomicWriteFile writes data to a temporary file, syncs to disk, and atomically renames it
@@ -128,6 +141,10 @@ func LoadYAML(path string, cfg *AppConfig) error {
 		case "storage_directory":
 			if val != "" {
 				cfg.StorageDirectory = val
+			}
+		case "base_path":
+			if val != "" {
+				cfg.BasePath = NormalizeBasePath(val)
 			}
 		}
 	}

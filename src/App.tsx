@@ -1,4 +1,4 @@
-import React, { useState, useEffect } from 'react';
+import React, { useState, useEffect, useRef } from 'react';
 import { Accessibility } from 'lucide-react';
 import { Navbar } from './components/Navbar';
 import { ConsoleView } from './components/ConsoleView';
@@ -11,6 +11,9 @@ import {
   useAccessibility,
 } from './contexts/AccessibilityContext';
 
+// No SSE frame for longer than this marks live telemetry stale (frozen KPIs)
+const TELEMETRY_STALE_AFTER_SEC = 10;
+
 function AppShell() {
   const [activeTab, setActiveTab] = useState<'monitor' | 'controls' | 'system'>('monitor');
   const [controlsSubTab, setControlsSubTab] = useState<
@@ -19,6 +22,9 @@ function AppShell() {
   const [telemetry, setTelemetry] = useState<LiveTelemetryPayload | null>(null);
   const [systemStats, setSystemStats] = useState<SystemStats | null>(null);
   const [isStreamConnected, setIsStreamConnected] = useState<boolean>(false);
+  const [isTelemetryStale, setIsTelemetryStale] = useState<boolean>(false);
+  const [staleSeconds, setStaleSeconds] = useState<number>(0);
+  const lastTelemetryAtRef = useRef<number>(0);
   const [showA11yModal, setShowA11yModal] = useState<boolean>(false);
   const [tempUnit, setTempUnit] = useState<'f' | 'c'>(() => {
     return (localStorage.getItem('pigradient_temp_unit') as 'f' | 'c') || 'f';
@@ -40,13 +46,14 @@ function AppShell() {
   const fetchLiveAndSystem = async () => {
     try {
       const [liveRes, sysRes] = await Promise.all([
-        fetch('/api/v1/live'),
-        fetch('/api/v1/system'),
+        fetch(`${import.meta.env.BASE_URL}api/v1/live`),
+        fetch(`${import.meta.env.BASE_URL}api/v1/system`),
       ]);
 
       if (liveRes.ok) {
         const liveData = await liveRes.json();
         setTelemetry(liveData);
+        lastTelemetryAtRef.current = Date.now();
       }
       if (sysRes.ok) {
         const sysData = await sysRes.json();
@@ -67,7 +74,7 @@ function AppShell() {
     let reconnectTimeout: ReturnType<typeof setTimeout> | null = null;
 
     const connectSSE = () => {
-      evtSource = new EventSource('/api/v1/stream');
+      evtSource = new EventSource(`${import.meta.env.BASE_URL}api/v1/stream`);
 
       evtSource.onopen = () => {
         setIsStreamConnected(true);
@@ -77,6 +84,7 @@ function AppShell() {
         try {
           const data: LiveTelemetryPayload = JSON.parse(event.data);
           setTelemetry(data);
+          lastTelemetryAtRef.current = Date.now();
           setIsStreamConnected(true);
         } catch {
           // Ignore malformed SSE frame
@@ -94,7 +102,7 @@ function AppShell() {
 
     const sysInterval = setInterval(async () => {
       try {
-        const res = await fetch('/api/v1/system');
+        const res = await fetch(`${import.meta.env.BASE_URL}api/v1/system`);
         if (res.ok) {
           const data = await res.json();
           setSystemStats(data);
@@ -109,8 +117,38 @@ function AppShell() {
     };
   }, []);
 
+  // Telemetry staleness watchdog: the SSE stream carries ~1 Hz frames plus
+  // collector status broadcasts. If no frame has arrived for >10s (e.g. monitor
+  // offline between status transitions), mark the payload stale so the UI greys
+  // out the frozen last-known values instead of presenting them as live.
+  useEffect(() => {
+    const elapsedSec = () =>
+      lastTelemetryAtRef.current > 0
+        ? Math.floor((Date.now() - lastTelemetryAtRef.current) / 1000)
+        : 0;
+
+    const watchdog = setInterval(() => {
+      setIsTelemetryStale(elapsedSec() > TELEMETRY_STALE_AFTER_SEC);
+    }, 2000);
+
+    return () => clearInterval(watchdog);
+  }, []);
+
+  // While stale, keep a per-second "last seen Xs ago" counter for the KPI cards
+  useEffect(() => {
+    if (!isTelemetryStale) {
+      setStaleSeconds(0);
+      return;
+    }
+    const computeStaleSec = () =>
+      Math.max(1, Math.floor((Date.now() - lastTelemetryAtRef.current) / 1000));
+    setStaleSeconds(computeStaleSec());
+    const ticker = setInterval(() => setStaleSeconds(computeStaleSec()), 1000);
+    return () => clearInterval(ticker);
+  }, [isTelemetryStale]);
+
   const handleUpdateTargetUrl = async (url: string) => {
-    const res = await fetch('/api/v1/system', {
+    const res = await fetch(`${import.meta.env.BASE_URL}api/v1/system`, {
       method: 'PUT',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({ targetUrl: url }),
@@ -153,6 +191,8 @@ function AppShell() {
         {activeTab === 'monitor' && (
           <ConsoleView
             telemetry={telemetry}
+            telemetryStale={isTelemetryStale}
+            staleSeconds={staleSeconds}
             tempUnit={tempUnit}
             setTempUnit={handleSetTempUnit}
             onOpenConnectivity={() => {

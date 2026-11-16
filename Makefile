@@ -28,18 +28,20 @@ build-amd64: frontend
 	CGO_ENABLED=0 GOOS=linux GOARCH=amd64 go build -ldflags="-s -w -X main.Version=$(VERSION)" -o bin/$(APP)-amd64 ./server/cmd/pigradient
 
 define package_deb
-	rm -rf pkg/deb-$(1)
-	mkdir -p bin pkg/deb-$(1)/DEBIAN pkg/deb-$(1)/usr/local/bin pkg/deb-$(1)/etc/pigradient pkg/deb-$(1)/etc/systemd/system pkg/deb-$(1)/var/log/pigradient pkg/deb-$(1)/mnt/usb/pigradient
-	cp bin/$(APP)-$(1) pkg/deb-$(1)/usr/local/bin/$(APP)
-	cp packaging/config.yaml pkg/deb-$(1)/etc/pigradient/config.yaml
-	cp packaging/pigradient.service pkg/deb-$(1)/etc/systemd/system/pigradient.service
-	sed -e "s/{{VERSION}}/$(VERSION)/g" -e "s/{{ARCH}}/$(1)/g" packaging/debian/DEBIAN/control > pkg/deb-$(1)/DEBIAN/control
-	cp packaging/debian/DEBIAN/conffiles pkg/deb-$(1)/DEBIAN/conffiles
-	cp packaging/debian/DEBIAN/postinst pkg/deb-$(1)/DEBIAN/postinst
-	cp packaging/debian/DEBIAN/prerm pkg/deb-$(1)/DEBIAN/prerm
-	chmod 644 pkg/deb-$(1)/etc/pigradient/config.yaml pkg/deb-$(1)/etc/systemd/system/pigradient.service pkg/deb-$(1)/DEBIAN/control pkg/deb-$(1)/DEBIAN/conffiles
-	chmod 755 pkg/deb-$(1)/usr/local/bin/$(APP) pkg/deb-$(1)/DEBIAN/postinst pkg/deb-$(1)/DEBIAN/prerm
-	dpkg-deb --root-owner-group --build pkg/deb-$(1) bin/$(APP)_$(VERSION)_$(1).deb
+	set -e; \
+	pkgroot=`mktemp -d`; \
+	trap 'rm -rf "$$pkgroot"' EXIT; \
+	mkdir -p bin "$$pkgroot/DEBIAN" "$$pkgroot/usr/local/bin" "$$pkgroot/etc/pigradient" "$$pkgroot/etc/systemd/system"; \
+	cp bin/$(APP)-$(1) "$$pkgroot/usr/local/bin/$(APP)"; \
+	cp packaging/config.yaml "$$pkgroot/etc/pigradient/config.yaml"; \
+	cp packaging/pigradient.service "$$pkgroot/etc/systemd/system/pigradient.service"; \
+	sed -e "s/{{VERSION}}/$(VERSION)/g" -e "s/{{ARCH}}/$(1)/g" packaging/debian/DEBIAN/control > "$$pkgroot/DEBIAN/control"; \
+	cp packaging/debian/DEBIAN/conffiles "$$pkgroot/DEBIAN/conffiles"; \
+	cp packaging/debian/DEBIAN/postinst "$$pkgroot/DEBIAN/postinst"; \
+	cp packaging/debian/DEBIAN/prerm "$$pkgroot/DEBIAN/prerm"; \
+	chmod 644 "$$pkgroot/etc/pigradient/config.yaml" "$$pkgroot/etc/systemd/system/pigradient.service" "$$pkgroot/DEBIAN/control" "$$pkgroot/DEBIAN/conffiles"; \
+	chmod 755 "$$pkgroot/usr/local/bin/$(APP)" "$$pkgroot/DEBIAN/postinst" "$$pkgroot/DEBIAN/prerm"; \
+	dpkg-deb --root-owner-group --build "$$pkgroot" bin/$(APP)_$(VERSION)_$(1).deb
 endef
 
 deb: build-pi

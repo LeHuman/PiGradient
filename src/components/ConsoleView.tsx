@@ -20,6 +20,7 @@ import {
   RefreshCw,
   SlidersHorizontal,
   Download,
+  Database,
   HelpCircle,
   WifiOff,
 } from 'lucide-react';
@@ -57,6 +58,8 @@ ChartJS.register(
 
 interface ConsoleViewProps {
   telemetry: LiveTelemetryPayload | null;
+  telemetryStale?: boolean;
+  staleSeconds?: number;
   tempUnit: 'f' | 'c';
   setTempUnit: (unit: 'f' | 'c') => void;
   onOpenConnectivity?: () => void;
@@ -162,8 +165,17 @@ const TIME_PRESETS: { id: TimeRangePreset; label: string; title?: string }[] = [
 
 const ANALYTICS_STORAGE_KEY = 'pigradient_analytics_tools_v3';
 
+// SSE gap threshold: a frame landing >2s after the buffered tail means the 5m
+// live buffer has a hole that CategoryScale would squish — backfill from archive
+const SSE_GAP_BACKFILL_SEC = 2;
+
+// 5m live buffer capacity (300 × 1s frames)
+const LIVE_BUFFER_MAX_POINTS = 300;
+
 export const ConsoleView: React.FC<ConsoleViewProps> = ({
   telemetry,
+  telemetryStale = false,
+  staleSeconds = 0,
   tempUnit,
   setTempUnit,
   onOpenConnectivity,
@@ -201,7 +213,11 @@ export const ConsoleView: React.FC<ConsoleViewProps> = ({
   }, [analyticsTools]);
 
   const [liveBuffer, setLiveBuffer] = useState<HistoricalPoint[]>([]);
+  const [isExportingRaw, setIsExportingRaw] = useState<boolean>(false);
   const fetchSeqRef = useRef<number>(0);
+  const liveTailTsRef = useRef<number>(0);
+  const backfillInFlightRef = useRef<Set<string>>(new Set());
+  const backfillDoneRef = useRef<Set<string>>(new Set());
   const liveBucketRef = useRef<{
     preset: TimeRangePreset;
     bucketTs: number;
@@ -227,7 +243,7 @@ export const ConsoleView: React.FC<ConsoleViewProps> = ({
 
       const start = now - windowSec;
       const res = await fetch(
-        `/api/v1/history?start=${start}&end=${now}&interval=${intervalSec}`
+        `${import.meta.env.BASE_URL}api/v1/history?start=${start}&end=${now}&interval=${intervalSec}`
       );
       if (res.ok && seq === fetchSeqRef.current) {
         const points: HistoricalPoint[] = await res.json();
@@ -271,10 +287,63 @@ export const ConsoleView: React.FC<ConsoleViewProps> = ({
     fetchHistoricalData(rangePreset);
   }, [rangePreset]);
 
+  // Track the newest buffered timestamp for SSE gap detection (kept in sync with
+  // every liveBuffer write: history load, live append, and archive backfill)
+  useEffect(() => {
+    liveTailTsRef.current =
+      liveBuffer.length > 0 ? liveBuffer[liveBuffer.length - 1].timestamp : 0;
+  }, [liveBuffer]);
+
+  // Backfill an SSE gap (frame landed >2s after the buffered tail) from the 1s
+  // archive so the 5m chart doesn't squish the hole via CategoryScale. Skips
+  // ranges that are in flight or already backfilled.
+  const backfillSseGap = async (fromTs: number, toTs: number) => {
+    const start = Math.max(fromTs + 1, toTs - LIVE_BUFFER_MAX_POINTS);
+    const end = toTs - 1;
+    if (end < start) return;
+    const rangeKey = `${start}-${end}`;
+    if (backfillInFlightRef.current.has(rangeKey) || backfillDoneRef.current.has(rangeKey)) {
+      return;
+    }
+    backfillInFlightRef.current.add(rangeKey);
+    try {
+      const res = await fetch(
+        `${import.meta.env.BASE_URL}api/v1/history?start=${start}&end=${end}&interval=1`
+      );
+      if (!res.ok) return;
+      const points: HistoricalPoint[] = await res.json();
+      backfillDoneRef.current.add(rangeKey);
+      setLiveBuffer((prev) => {
+        if (prev.length === 0 || !Array.isArray(points) || points.length === 0) return prev;
+        const existingTs = new Set(prev.map((p) => p.timestamp));
+        const fresh = points.filter(
+          (p) => p && p.timestamp >= start && p.timestamp <= end && !existingTs.has(p.timestamp)
+        );
+        if (fresh.length === 0) return prev;
+        // Archive points are older than the current live tail — merge in
+        // timestamp order and re-cap to the 5m window
+        const merged = [...prev, ...fresh].sort((a, b) => a.timestamp - b.timestamp);
+        return merged.length > LIVE_BUFFER_MAX_POINTS
+          ? merged.slice(-LIVE_BUFFER_MAX_POINTS)
+          : merged;
+      });
+    } catch {
+      // Transient backfill failure — the gap remains until another gap triggers a retry
+    } finally {
+      backfillInFlightRef.current.delete(rangeKey);
+    }
+  };
+
   useEffect(() => {
     if (!telemetry || telemetry.timestamp <= 0 || !isLiveStreaming || isLoadingHistory) return;
 
     if (rangePreset === '5m') {
+      // SSE gap detection: a frame landing >2s after the buffered tail means the
+      // live buffer has a hole — fetch the missing archive slice in the background
+      const lastTs = liveTailTsRef.current;
+      if (lastTs > 0 && telemetry.timestamp - lastTs > SSE_GAP_BACKFILL_SEC) {
+        void backfillSseGap(lastTs, telemetry.timestamp);
+      }
       setLiveBuffer((prev) => {
         const last = prev[prev.length - 1];
         if (last && last.timestamp === telemetry.timestamp) return prev;
@@ -1081,6 +1150,33 @@ export const ConsoleView: React.FC<ConsoleViewProps> = ({
     URL.revokeObjectURL(url);
   };
 
+  // Raw archive export: stream the full-fidelity 14-column raw sensor archive
+  // for the active window from the gateway (fetch+blob keeps loading UX and
+  // error handling consistent with the chart CSV above)
+  const handleExportRawCsv = async () => {
+    if (activeData.length === 0 || isExportingRaw) return;
+    setIsExportingRaw(true);
+    try {
+      const rangeStart = activeData[0].timestamp;
+      const rangeEnd = activeData[activeData.length - 1].timestamp;
+      const res = await fetch(
+        `${import.meta.env.BASE_URL}api/v1/export.csv?start=${rangeStart}&end=${rangeEnd}`
+      );
+      if (!res.ok) return;
+      const blob = await res.blob();
+      const url = URL.createObjectURL(blob);
+      const a = document.createElement('a');
+      a.href = url;
+      a.download = `pigradient_raw_${rangeStart}-${rangeEnd}.csv`;
+      a.click();
+      URL.revokeObjectURL(url);
+    } catch {
+      // Transient export failure — keep the chart CSV available as fallback
+    } finally {
+      setIsExportingRaw(false);
+    }
+  };
+
   const chartOptions: ChartOptions<'line'> = {
     responsive: true,
     maintainAspectRatio: false,
@@ -1218,6 +1314,10 @@ export const ConsoleView: React.FC<ConsoleViewProps> = ({
   const { raw, processed } = telemetry;
   const hasTelemetry = telemetry.timestamp > 0;
   const isMonitorDisconnected = !hasTelemetry || telemetry.status === 'offline';
+  // Stale telemetry: no SSE frame for >10s — last-known values are frozen, so
+  // grey the KPI cards out instead of presenting them as live readings
+  const isStale = telemetryStale && hasTelemetry;
+  const staleAgoSec = isStale ? Math.max(1, staleSeconds) : 0;
 
   const co2StatusLabel = !hasTelemetry
     ? 'No Data'
@@ -1269,7 +1369,7 @@ export const ConsoleView: React.FC<ConsoleViewProps> = ({
 
   return (
     <div className="space-y-4 sm:space-y-5 max-w-7xl mx-auto px-4 sm:px-6 py-4 sm:py-5">
-      {isMonitorDisconnected && (
+      {(isMonitorDisconnected || isStale) && (
         <MatCard className="px-4 py-3.5 flex flex-col sm:flex-row sm:items-center justify-between gap-3 border-amber-500/25 bg-[#1b1918]">
           <div className="flex items-start sm:items-center gap-3 min-w-0">
             <div className="w-8 h-8 rounded-lg bg-amber-500/15 border border-amber-500/30 flex items-center justify-center shrink-0">
@@ -1279,10 +1379,14 @@ export const ConsoleView: React.FC<ConsoleViewProps> = ({
               <p className="text-xs sm:text-[13px] font-semibold text-white">
                 {!hasTelemetry
                   ? 'No AirGradient monitor configured or reachable yet'
+                  : isStale
+                  ? `No signal — last seen ${staleAgoSec}s ago`
                   : 'Monitor disconnected — showing last known values'}
               </p>
               <p className="text-xs text-[#9ca3af] mt-0.5 truncate">
-                {telemetry.error_message
+                {isStale
+                  ? 'Live frames stopped — KPI values below are the last archived snapshot, not live readings.'
+                  : telemetry.error_message
                   ? `Status: ${telemetry.error_message}. Set your monitor LAN IP or mDNS address in Connectivity.`
                   : 'Configure your monitor LAN IP or mDNS address in Device Controls → Connectivity.'}
               </p>
@@ -1303,7 +1407,12 @@ export const ConsoleView: React.FC<ConsoleViewProps> = ({
       )}
 
       {/* 1. Material KPI Row */}
-      <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-3 sm:gap-4">
+      <div
+        className={`grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-3 sm:gap-4 transition-opacity duration-300 ${
+          isStale ? 'opacity-50 saturate-50' : ''
+        }`}
+        aria-disabled={isStale || undefined}
+      >
         {/* Card 1: Air Quality & Particulate Spectrum (PMS5003) */}
         <MatCard
           className="p-4 flex flex-col justify-between relative overflow-hidden"
@@ -1826,17 +1935,32 @@ export const ConsoleView: React.FC<ConsoleViewProps> = ({
                   />
                 </div>
 
-                <MatButton
-                  variant="outlined"
-                  size="sm"
-                  onClick={handleExportCsv}
-                  disabled={activeData.length === 0}
-                  title="Download visible telemetry history including processed EPA AQI, Dew Point, Heat Index, and Abs Humidity as CSV"
-                  icon={<Download className="w-3.5 h-3.5" aria-hidden="true" />}
-                  className="self-end xl:self-auto"
-                >
-                  Export CSV
-                </MatButton>
+                <div className="flex flex-col items-end gap-1.5 self-end xl:self-auto">
+                  <MatButton
+                    variant="outlined"
+                    size="sm"
+                    onClick={handleExportCsv}
+                    disabled={activeData.length === 0}
+                    title="Download the visible (downsampled) chart history including processed EPA AQI, Dew Point, Heat Index, and Abs Humidity as CSV"
+                    icon={<Download className="w-3.5 h-3.5" aria-hidden="true" />}
+                  >
+                    Export Chart CSV
+                  </MatButton>
+                  <MatButton
+                    variant="outlined"
+                    size="sm"
+                    onClick={handleExportRawCsv}
+                    disabled={activeData.length === 0 || isExportingRaw}
+                    title="Stream the full-fidelity 14-column raw sensor archive for the active time window from the gateway as CSV"
+                    icon={<Database className="w-3.5 h-3.5" aria-hidden="true" />}
+                  >
+                    {isExportingRaw ? 'Exporting…' : 'Raw Archive CSV (full fidelity)'}
+                  </MatButton>
+                  <span className="text-[10px] text-[#7e8596] text-right leading-tight">
+                    Chart CSV exports the downsampled points on screen · Raw Archive CSV
+                    streams every archived 1s sample for the window
+                  </span>
+                </div>
               </div>
 
               {/* Window Statistical Summary for Active Series */}

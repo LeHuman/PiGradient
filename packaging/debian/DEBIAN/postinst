@@ -9,9 +9,11 @@ if ! id -u pigradient >/dev/null 2>&1; then
     useradd --system --gid pigradient --no-create-home --shell /usr/sbin/nologin pigradient
 fi
 
-# Ensure runtime directories exist with least-privilege ownership
-mkdir -p /etc/pigradient /mnt/usb/pigradient /var/log/pigradient
-chown -R pigradient:pigradient /mnt/usb/pigradient /var/log/pigradient /etc/pigradient
+# /etc/pigradient ships root:root (dir 755, config.yaml 644) — the daemon only
+# needs read access, so no chown here. /mnt/usb and /var/log/pigradient are NOT
+# created at install time: the storage drive may be unmounted or FAT-formatted,
+# which would abort dpkg -i under set -e. Set ownership up manually post-install
+# (see README: mount the ext4 drive at /mnt/usb, then chown the archive directory).
 chmod 755 /usr/local/bin/pigradient
 
 # Reload systemd and enable service on target hosts
@@ -25,6 +27,8 @@ echo "=========================================================="
 echo "PiGradient installed successfully!"
 echo "Dashboard listening on: http://localhost:8080"
 echo "Configure target device: /etc/pigradient/config.yaml"
+echo "Storage: mount the ext4 USB drive at /mnt/usb, then run:"
+echo "  sudo chown -R pigradient:pigradient /mnt/usb/pigradient"
 echo "Check daemon logs: journalctl -u pigradient -f"
 echo "=========================================================="
 exit 0

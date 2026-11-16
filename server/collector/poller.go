@@ -18,6 +18,11 @@ import (
 
 const maxMeasureResponseBytes = 1 << 20 // 1 MiB cap on /measures/current payload
 
+const (
+	minSaneEpoch         = int64(1735689600) // 2025-01-01 00:00:00 UTC; older "now" implies an unsynced clock
+	statusNotifyInterval = 30 * time.Second  // re-ping UI while the collector stays offline
+)
+
 type Collector struct {
 	target      *config.TargetStore
 	client      *http.Client
@@ -33,6 +38,11 @@ type Collector struct {
 	subMu       sync.RWMutex
 	deviceInfo  DeviceInfo
 	infoMu      sync.RWMutex
+
+	statusNotify     chan struct{} // cap-1 ping broadcast on collector status transitions
+	lastStatusNotify atomic.Int64  // unix seconds of last StatusChangeChan send (rate limit)
+	badClockActive   atomic.Bool   // set while local clock is behind minSaneEpoch
+	badClockLastLog  atomic.Int64  // unix seconds of last bad-clock Error log (rate limit)
 }
 
 func NewCollector(target *config.TargetStore, outChan chan<- SensorRecord) *Collector {
@@ -48,6 +58,24 @@ func NewCollector(target *config.TargetStore, outChan chan<- SensorRecord) *Coll
 		},
 		outChan: outChan,
 		wakeCh:  make(chan struct{}, 1),
+
+		statusNotify: make(chan struct{}, 1),
+	}
+}
+
+// StatusChangeChan returns a cap-1 channel pinged whenever the collector crosses
+// an online<->offline boundary, plus a re-ping every ~30s while still offline.
+// Consumers must broadcast their current snapshot on receipt so UIs never show
+// frozen KPIs after a device stops responding.
+func (c *Collector) StatusChangeChan() <-chan struct{} {
+	return c.statusNotify
+}
+
+func (c *Collector) notifyStatusChange() {
+	c.lastStatusNotify.Store(time.Now().UTC().Unix())
+	select {
+	case c.statusNotify <- struct{}{}:
+	default:
 	}
 }
 
@@ -152,12 +180,20 @@ func (c *Collector) Start(ctx context.Context) {
 				if prevFails >= 3 {
 					logger.Info("Collector", "Monitor connection restored (%s)", c.target.DeviceURL())
 				}
-				nextWait = nominal
+				if prevFails >= 1 {
+					// Off/line -> online transition: ping UIs so stale snapshots refresh immediately.
+					c.notifyStatusChange()
+				}
+				// Align successful polls to nominal wall-clock boundaries so the 1 Hz
+				// cadence covers every unix second instead of drifting by HTTP RTT.
+				nextWait = alignedWait(nominal)
 			} else {
 				c.setLastError(errMsg)
 				fails := c.consecFails.Add(1)
 				if fails == 1 {
 					logger.Warn("Collector", "Poll failed (%s): %s", c.target.DeviceURL(), errMsg)
+					// Online -> degraded/offline transition: ping UIs immediately.
+					c.notifyStatusChange()
 				} else if fails == 3 {
 					logger.Warn("Collector", "Transitioned to DEGRADED backoff state (5s cadence): %s", errMsg)
 				} else if fails == 10 {
@@ -174,8 +210,30 @@ func (c *Collector) Start(ctx context.Context) {
 			}
 		}
 
+		// While offline, re-assert the status change at most every 30s so freshly
+		// connected SSE clients and recovering UIs also learn about the outage.
+		if c.consecFails.Load() > 0 && time.Since(time.Unix(c.lastStatusNotify.Load(), 0)) >= statusNotifyInterval {
+			c.notifyStatusChange()
+		}
+
 		timer.Reset(nextWait)
 	}
+}
+
+// alignedWait returns the duration until the next nominal wall-clock boundary
+// (now.Truncate(nominal)+nominal), so poll timestamps stay glued to whole
+// intervals instead of absorbing the HTTP round-trip each cycle.
+func alignedWait(nominal time.Duration) time.Duration {
+	if nominal <= 0 {
+		return time.Second
+	}
+	now := time.Now()
+	wait := now.Truncate(nominal).Add(nominal).Sub(now)
+	if wait < 20*time.Millisecond {
+		// RTT overran the boundary; fall back to the plain nominal cadence.
+		return nominal
+	}
+	return wait
 }
 
 func sanitizeFloat(v, fallback, minVal, maxVal float64) float64 {
@@ -289,6 +347,22 @@ func (c *Collector) poll(ctx context.Context) (bool, string) {
 		TVOCRaw:   raw.TVOCRaw,
 		NOxIndex:  noxIdx,
 		NOxRaw:    raw.NOxRaw,
+	}
+
+	// Sane-epoch guard: refuse to queue/archive samples stamped by an unsynced
+	// clock; a wrong year would poison monthly partitions and history ranges.
+	// The HTTP poll itself succeeded, so keep nominal cadence and just drop it.
+	if record.Timestamp < minSaneEpoch {
+		nowSec := time.Now().UTC().Unix()
+		wasActive := c.badClockActive.Swap(true)
+		last := c.badClockLastLog.Load()
+		if (!wasActive || nowSec-last >= 60) && c.badClockLastLog.CompareAndSwap(last, nowSec) {
+			logger.Error("Collector", "clock not synced (sample timestamp %d predates 2025-01-01); refusing to archive samples until the clock recovers", record.Timestamp)
+		}
+		return true, ""
+	}
+	if c.badClockActive.Swap(false) {
+		logger.Info("Collector", "clock resynced (samples back past 2025-01-01); resuming archiving")
 	}
 
 	// Queue for storage insertion

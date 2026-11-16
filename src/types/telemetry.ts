@@ -114,6 +114,11 @@ export interface SystemStats {
   goroutines: number;
   simulatedMode: boolean;
   device?: DeviceInfo;
+  // Archive storage health (reported by /api/v1/system)
+  storageStatus?: 'ok' | 'degraded' | 'error';
+  lastWriteError?: string;
+  droppedRecords?: number;
+  diskFreeBytes?: number;
 }
 
 export interface LogEntry {

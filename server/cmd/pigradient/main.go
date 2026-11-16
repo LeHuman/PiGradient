@@ -61,6 +61,9 @@ func main() {
 	if explicitFlags["poll-interval"] {
 		effectivePollInterval = *pollInterval
 	}
+	// Optional dashboard/API base path (config.yaml `base_path: /pigradient`);
+	// empty means serve only at the root. Already normalized by LoadYAML.
+	effectiveBasePath := fileCfg.BasePath
 
 	logger.Info("Main", "Initializing PiGradient v%s...", Version)
 
@@ -86,6 +89,7 @@ func main() {
 	go col.Start(ctx)
 
 	// 5. Start Storage Writer Goroutine (Batched inserts + WAL sync)
+	sm.SetQueueLenFunc(func() int { return len(writeQueue) }, cap(writeQueue))
 	go sm.StartWriter(ctx, writeQueue)
 
 	// 6. Initialize API, Proxy, Scheduler, and System Handlers
@@ -96,21 +100,32 @@ func main() {
 	systemHandler := api.NewSystemHandler(targetStore, col, sm)
 	go scheduleMgr.Start(ctx)
 
-	// Real-Time Fan-Out Pipeline: Taps ingestion records to live cache and SSE
+	// Real-Time Fan-Out Pipeline: Taps ingestion records to live cache and SSE.
+	// Subscribe() is hoisted OUT of the loop: calling it per-iteration allocated a
+	// fresh cap-50 channel every sample and leaked every prior one forever.
+	subCh := col.Subscribe()
+	statusCh := col.StatusChangeChan()
 	go func() {
 		for {
 			select {
 			case <-ctx.Done():
 				return
-			case r := <-col.Subscribe():
+			case r := <-subCh:
 				metricsHandler.UpdateLatest(r)
+				sseBroker.BroadcastJSON(metricsHandler.GetLivePayload())
+			case <-statusCh:
+				// Collector went offline/online (or 30s offline re-ping): re-broadcast
+				// the current snapshot so UIs never present stale telemetry as live.
 				sseBroker.BroadcastJSON(metricsHandler.GetLivePayload())
 			}
 		}
 	}()
 
 	// 7. Build HTTP Server (WriteTimeout=0 preserves persistent 1 Hz SSE streams)
-	router := api.SetupRouter(metricsHandler, sseBroker, proxyHandler, scheduleMgr, systemHandler)
+	router := api.SetupRouter(metricsHandler, sseBroker, proxyHandler, scheduleMgr, systemHandler, effectiveBasePath)
+	if effectiveBasePath != "" {
+		logger.Info("Main", "Dashboard and API additionally served under base path %s/", effectiveBasePath)
+	}
 	server := &http.Server{
 		Addr:              effectiveListenAddr,
 		Handler:           router,

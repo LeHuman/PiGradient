@@ -64,8 +64,9 @@ Pass `VERSION=1.2.3` (e.g. `make deb VERSION=1.2.3`) to set both the Debian pack
    ```
    On installation, `DEBIAN/postinst`:
    - Creates the `pigradient` system user/group.
-   - Creates `/etc/pigradient`, `/mnt/usb/pigradient`, and `/var/log/pigradient` owned by `pigradient:pigradient`.
-   - Registers and starts `pigradient.service` via `systemd`.
+   - Leaves `/etc/pigradient` root-owned (dir `755`, `config.yaml` `644`) — the daemon only needs read access.
+   - Does **not** create `/mnt/usb` or `/var/log/pigradient` (the storage drive may be unmounted or FAT at install time, which would abort `dpkg -i`) — set ownership up manually (step 3).
+   - Registers and starts `pigradient.service` via `systemd`; the unit adds `RequiresMountsFor=/mnt/usb` (no silent fallback writes to the microSD when the drive is unmounted) and `time-sync.target` ordering (no bogus monthly partitions from a fake-hwclock boot).
    - `DEBIAN/conffiles` ensures future `.deb` upgrades preserve your `/etc/pigradient/config.yaml`.
 
 2. Configure your AirGradient monitor URL:
@@ -76,6 +77,7 @@ Pass `VERSION=1.2.3` (e.g. `make deb VERSION=1.2.3`) to set both the Debian pack
      poll_interval_seconds: 1
      listen_address: ":8080"
      storage_directory: "/mnt/usb/pigradient"
+     base_path: "" # set to "/pigradient" to also serve the dashboard at http://<host>:8080/pigradient/ (root keeps working either way)
      ```
      Then restart the daemon:
      ```bash
@@ -83,8 +85,11 @@ Pass `VERSION=1.2.3` (e.g. `make deb VERSION=1.2.3`) to set both the Debian pack
      sudo journalctl -u pigradient -f
      ```
 
+   - **Multi-service Pi**: the recommended production pattern is **Caddy** (or nginx) fronting several services and routing `/pigradient/*` to the daemon — set `base_path: "/pigradient"` and keep the Go daemon on `:8080`.
+
 3. *(Optional)* Recommended USB flash storage mount for `/mnt/usb/pigradient`:
-   - Mount an ext4 USB drive at `/mnt/usb` (e.g. via `/etc/fstab` with `noatime,nofail`) and ensure `sudo chown -R pigradient:pigradient /mnt/usb/pigradient`.
+   - Mount an ext4 USB drive at `/mnt/usb` (e.g. via `/etc/fstab` with `defaults,noatime,nofail`) and ensure `sudo chown -R pigradient:pigradient /mnt/usb/pigradient`.
+   - **Cloud sync agents**: sync `/mnt/usb/pigradient` **one-way (send-only)** and exclude `*.db-wal`, `*.db-shm`, `*.db-journal`, and `*.tmp*` — the daemon checkpoints WAL every 15 min so `.db` files are stable between checkpoints, but the sidecars must never be synced, and one-way sync prevents the agent overwriting an open database.
 
 ---
 

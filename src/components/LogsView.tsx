@@ -36,7 +36,7 @@ export const LogsView: React.FC<LogsViewProps> = ({ systemStats }) => {
 
   const fetchLogs = async () => {
     try {
-      const res = await fetch('/api/v1/logs');
+      const res = await fetch(`${import.meta.env.BASE_URL}api/v1/logs`);
       if (res.ok) {
         const data = await res.json();
         setLogs(Array.isArray(data) ? data : []);

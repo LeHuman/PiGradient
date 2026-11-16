@@ -355,8 +355,8 @@ export const SettingsView: React.FC<SettingsViewProps> = ({
     setLoading(true);
     try {
       const [cfgRes, schedRes] = await Promise.all([
-        fetch('/api/v1/config'),
-        fetch('/api/v1/schedule'),
+        fetch(`${import.meta.env.BASE_URL}api/v1/config`),
+        fetch(`${import.meta.env.BASE_URL}api/v1/schedule`),
       ]);
 
       if (cfgRes.ok) {
@@ -402,7 +402,7 @@ export const SettingsView: React.FC<SettingsViewProps> = ({
         delete payload.ledBarBrightness;
         delete payload.displayBrightness;
       }
-      const res = await fetch('/api/v1/config', {
+      const res = await fetch(`${import.meta.env.BASE_URL}api/v1/config`, {
         method: 'PUT',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify(payload),
@@ -432,7 +432,7 @@ export const SettingsView: React.FC<SettingsViewProps> = ({
     setSavingSchedule(true);
     setSaveStatus(null);
     try {
-      const res = await fetch('/api/v1/schedule', {
+      const res = await fetch(`${import.meta.env.BASE_URL}api/v1/schedule`, {
         method: 'PUT',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify(schedule),
@@ -462,7 +462,7 @@ export const SettingsView: React.FC<SettingsViewProps> = ({
     setTestingLed(true);
     setSaveStatus(null);
     try {
-      const res = await fetch('/api/v1/config', {
+      const res = await fetch(`${import.meta.env.BASE_URL}api/v1/config`, {
         method: 'PUT',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({
@@ -492,7 +492,7 @@ export const SettingsView: React.FC<SettingsViewProps> = ({
   const executeManual400PpmReset = async () => {
     try {
       setSavingDevice(true);
-      const res = await fetch('/api/v1/config', {
+      const res = await fetch(`${import.meta.env.BASE_URL}api/v1/config`, {
         method: 'PUT',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({

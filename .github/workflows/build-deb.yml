@@ -94,8 +94,6 @@ jobs:
           mkdir -p "$PKG_DIR/usr/local/bin"
           mkdir -p "$PKG_DIR/etc/pigradient"
           mkdir -p "$PKG_DIR/etc/systemd/system"
-          mkdir -p "$PKG_DIR/var/log/pigradient"
-          mkdir -p "$PKG_DIR/mnt/usb/pigradient"
 
           cp bin/pigradient "$PKG_DIR/usr/local/bin/pigradient"
           cp packaging/config.yaml "$PKG_DIR/etc/pigradient/config.yaml"

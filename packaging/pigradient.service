@@ -1,8 +1,9 @@
 [Unit]
 Description=PiGradient Local Analytics Logger and Gateway
 Documentation=https://github.com/pigradient/pigradient
-After=network-online.target local-fs.target
-Wants=network-online.target
+After=network-online.target time-sync.target local-fs.target
+Wants=network-online.target time-sync.target
+RequiresMountsFor=/mnt/usb
 
 [Service]
 Type=simple

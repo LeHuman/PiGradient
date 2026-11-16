@@ -62,6 +62,13 @@ func (h *SystemHandler) HandleSystem(w http.ResponseWriter, r *http.Request) {
 			"goroutines":           runtime.NumGoroutine(),
 			"simulatedMode":        false,
 			"device":               h.collector.GetDeviceInfo(),
+
+			// Storage pipeline health (never blocks on the writer mutex):
+			"storageStatus":  h.storage.StorageStatus(),
+			"lastWriteError": h.storage.LastWriteError(),
+			"droppedRecords": h.storage.DroppedSamples(),
+			"queuedRecords":  h.storage.QueuedRecords(),
+			"diskFreeBytes":  h.storage.DiskFreeBytes(), // -1 when unknown (non-Linux)
 		}
 		_ = json.NewEncoder(w).Encode(payload)
 
