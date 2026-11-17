@@ -40,7 +40,7 @@ pigradient/
 
 ### 1. Build the `.deb` or Standalone Binary
 
-From a Linux/macOS host with Node.js 22+ and Go 1.22+:
+From a Linux/macOS host with Node.js 22+ and Go 1.26+:
 
 ```bash
 # Build ARM64 Raspberry Pi binary (embeds Vite frontend automatically)

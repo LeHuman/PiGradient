@@ -2,7 +2,7 @@
 
 ## 1. Prerequisites
 - **Frontend / Dev Preview**: Node.js `22+` and `npm`
-- **Production Binary & `.deb` Packaging**: Go `1.22+` and `dpkg-deb` (on Linux/Debian/Ubuntu, or CI via GitHub Actions)
+- **Production Binary & `.deb` Packaging**: Go `1.26+` and `dpkg-deb` (on Linux/Debian/Ubuntu, or CI via GitHub Actions)
 - **Hardware (Target Runtime)**: Raspberry Pi (64-bit `arm64` or 32-bit `armhf` Raspberry Pi OS) on the same LAN as an AirGradient ONE monitor running firmware `v3.0.10+` (`v3.1.4+` recommended for EPA/SLR corrections).
 
 ---
@@ -29,7 +29,7 @@ npm run dev
   ```bash
   npm run lint
   npm run build
-  make test   # Go unit tests (requires Go 1.22+)
+  make test   # Go unit tests (requires Go 1.26+)
   ```
 
 ---
@@ -97,7 +97,7 @@ Pass `VERSION=1.2.3` (e.g. `make deb VERSION=1.2.3`) to set both the Debian pack
 
 Triggered on pushes/PRs to `main`, version tags `v*`, or manual `workflow_dispatch`:
 1. **Frontend (`Node 22`)**: Installs dependencies, runs `npm run lint` (`tsc --noEmit`), builds Vite assets (`npm run build`), and syncs `dist/*` -> `dashboard/dist/`.
-2. **Backend (`Go 1.22`)**: Runs `go mod tidy`, executes `go test -v ./server/...`, and cross-compiles static `CGO_ENABLED=0` binaries for `arm64`, `armhf` (`GOARM=7`), and `amd64`.
+2. **Backend (`Go 1.27`)**: Runs `go mod tidy`, executes `go test -v ./server/...`, and cross-compiles static `CGO_ENABLED=0` binaries for `arm64`, `armhf` (`GOARM=7`), and `amd64`.
 3. **Debian Packaging**:
    - Normalizes Debian-compatible `pkg_version` (`X.Y.Z` for `v*` tags; `1.0.0-snapshot.<run>` for branches/PRs).
    - Stages `/usr/local/bin/pigradient`, `/etc/pigradient/config.yaml`, `/etc/systemd/system/pigradient.service`, `DEBIAN/control`, `DEBIAN/conffiles`, `DEBIAN/postinst`, and `DEBIAN/prerm` with explicit permissions (`0755` / `0644`) and `--root-owner-group`.
