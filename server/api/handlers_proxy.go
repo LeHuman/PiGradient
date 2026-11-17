@@ -72,8 +72,6 @@ func validateConfigField(key string, val any) bool {
 	case "cellOperatorId", "cellOperatorFailCount":
 		n, ok := val.(float64)
 		return ok && n >= 0 && n <= 100000
-		s, ok := val.(string)
-		return ok && len(s) <= 512
 	case "postDataToAirGradient", "disableCloudConnection", "offlineMode",
 		"monitorDisplayCompensatedValues", "co2CalibrationRequested", "ledBarTestRequested":
 		_, ok := val.(bool)
