@@ -107,14 +107,14 @@ func validateConfigField(key string, val any) bool {
 						}
 					}
 				}
-			case "temp", "rhum":
+			case "temp", "atmp", "rhum":
 				if algo, exists := sec["correctionAlgorithm"]; exists {
 					s, ok := algo.(string)
 					if !ok || (s != "ag_pms5003t_default" && s != "slr" && s != "none" && s != "") {
 						return false
 					}
 				}
-				if slrRaw, exists := sec["slr"]; exists {
+				if slrRaw, exists := sec["slr"]; exists && slrRaw != nil {
 					slr, ok := slrRaw.(map[string]any)
 					if !ok {
 						return false
