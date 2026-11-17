@@ -112,3 +112,8 @@ npm run dev                      # terminal 2 — Vite dev server on :3000
 ## Security
 
 No authentication by design — the daemon serves plain HTTP on the LAN. Do not expose it beyond your network; put it behind an authenticating proxy if remote access is needed.
+
+## License
+
+MIT — see [LICENSE](LICENSE).
+
