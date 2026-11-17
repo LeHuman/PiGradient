@@ -262,6 +262,11 @@ func clampInt(v, minVal, maxVal int) int {
 	return v
 }
 
+// roundInt rounds a fractional device-reported number to a stable integer.
+func roundInt(v float64) int {
+	return int(math.Round(v))
+}
+
 func (c *Collector) poll(ctx context.Context) (bool, string) {
 	start := time.Now()
 	url := c.target.DeviceURL() + "/measures/current"
@@ -321,17 +326,19 @@ func (c *Collector) poll(ctx context.Context) (bool, string) {
 		rhumComp = sanitizeFloat(*raw.RHumCompensated, rhum, 0, 100)
 	}
 
-	rco2 := clampInt(raw.RCO2, 0, 50000)
-	tvocIdx := clampInt(raw.TVOCIndex, 0, 500)
-	noxIdx := clampInt(raw.NOxIndex, 0, 500)
+	// Device firmware may emit raw/count fields as fractional JSON numbers;
+	// AirGradientRaw stores them as float64 so decode never fails.
+	rco2 := clampInt(roundInt(raw.RCO2), 0, 50000)
+	tvocIdx := clampInt(roundInt(raw.TVOCIndex), 0, 500)
+	noxIdx := clampInt(roundInt(raw.NOxIndex), 0, 500)
 
 	c.infoMu.Lock()
 	c.deviceInfo = DeviceInfo{
 		SerialNo:  raw.SerialNo,
 		Firmware:  raw.Firmware,
 		Model:     raw.Model,
-		WiFiRSSI:  raw.WiFi,
-		BootCount: raw.BootCount,
+		WiFiRSSI:  roundInt(raw.WiFi),
+		BootCount: roundInt(raw.BootCount),
 	}
 	c.infoMu.Unlock()
 
@@ -347,9 +354,9 @@ func (c *Collector) poll(ctx context.Context) (bool, string) {
 		RHum:      rhum,
 		RHumComp:  rhumComp,
 		TVOCIndex: tvocIdx,
-		TVOCRaw:   raw.TVOCRaw,
+		TVOCRaw:   roundInt(raw.TVOCRaw),
 		NOxIndex:  noxIdx,
-		NOxRaw:    raw.NOxRaw,
+		NOxRaw:    roundInt(raw.NOxRaw),
 	}
 
 	// Sane-epoch guard: refuse to queue/archive samples stamped by an unsynced

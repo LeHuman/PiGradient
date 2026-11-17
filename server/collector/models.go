@@ -2,23 +2,23 @@ package collector
 
 type AirGradientRaw struct {
 	SerialNo        string   `json:"serialno"`
-	WiFi            int      `json:"wifi"`
+	WiFi            float64  `json:"wifi"`
 	Firmware        string   `json:"firmware"`
 	Model           string   `json:"model"`
 	PM01            float64  `json:"pm01"`
 	PM02            float64  `json:"pm02"`
 	PM10            float64  `json:"pm10"`
 	PM02Compensated *float64 `json:"pm02Compensated"`
-	RCO2            int      `json:"rco2"`
+	RCO2            float64  `json:"rco2"`
 	ATmp            float64  `json:"atmp"`
 	ATmpCompensated *float64 `json:"atmpCompensated"`
 	RHum            float64  `json:"rhum"`
 	RHumCompensated *float64 `json:"rhumCompensated"`
-	TVOCIndex       int      `json:"tvocIndex"`
-	TVOCRaw         int      `json:"tvocRaw"`
-	NOxIndex        int      `json:"noxIndex"`
-	NOxRaw          int      `json:"noxRaw"`
-	BootCount       int      `json:"bootCount"`
+	TVOCIndex       float64  `json:"tvocIndex"`
+	TVOCRaw         float64  `json:"tvocRaw"`
+	NOxIndex        float64  `json:"noxIndex"`
+	NOxRaw          float64  `json:"noxRaw"`
+	BootCount       float64  `json:"bootCount"`
 }
 
 type DeviceInfo struct {
