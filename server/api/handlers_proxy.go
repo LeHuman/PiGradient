@@ -6,6 +6,7 @@ import (
 	"errors"
 	"io"
 	"net/http"
+	"strings"
 	"time"
 
 	"pigradient/server/config"
@@ -79,8 +80,31 @@ func validateConfigField(key string, val any) bool {
 			case "pm02":
 				if algo, exists := sec["correctionAlgorithm"]; exists {
 					s, ok := algo.(string)
-					if !ok || (s != "epa_2021" && s != "none" && s != "") {
+					if !ok || !validPMAlgorithm(s) {
 						return false
+					}
+				}
+				if slrRaw, exists := sec["slr"]; exists && slrRaw != nil {
+					slr, ok := slrRaw.(map[string]any)
+					if !ok {
+						return false
+					}
+					if v, has := slr["intercept"]; has {
+						n, ok := v.(float64)
+						if !ok || n < -100 || n > 100 {
+							return false
+						}
+					}
+					if v, has := slr["scalingFactor"]; has {
+						n, ok := v.(float64)
+						if !ok || n <= 0 || n > 10 {
+							return false
+						}
+					}
+					if v, has := slr["useEpa2021"]; has {
+						if _, ok := v.(bool); !ok {
+							return false
+						}
 					}
 				}
 			case "temp", "rhum":
@@ -116,6 +140,30 @@ func validateConfigField(key string, val any) bool {
 	default:
 		return false
 	}
+}
+
+// validPMAlgorithm accepts the exact set monitor firmware recognizes
+// (AgConfigure.cpp PM_CORRECTION_ALGORITHM_NAMES + "slr_<batch>" substring).
+func validPMAlgorithm(s string) bool {
+	switch s {
+	case "", "none", "epa_2021", "custom", "factory_calibration", "custom_via_pm25_raw":
+		return true
+	}
+	if !strings.HasPrefix(s, "slr_") || len(s) > 72 {
+		return false
+	}
+	tail := s[len("slr_"):]
+	if tail == "" {
+		return false
+	}
+	for _, r := range tail {
+		switch {
+		case r >= 'a' && r <= 'z', r >= 'A' && r <= 'Z', r >= '0' && r <= '9', r == '_', r == '-':
+		default:
+			return false
+		}
+	}
+	return true
 }
 
 func (h *ProxyHandler) HandleConfig(w http.ResponseWriter, r *http.Request) {

@@ -289,10 +289,64 @@ const OledDisplayPreview: React.FC<{
   );
 };
 
+interface Pm02SlrConfig {
+  intercept: number;
+  scalingFactor: number;
+  useEpa2021?: boolean;
+}
+
+interface Pm02CorrectionConfig {
+  correctionAlgorithm: string;
+  slr?: Pm02SlrConfig;
+}
+
+interface Pm25BatchPreset {
+  name: string;
+  scalingFactor: number;
+  factorText: string;
+}
+
+// AirGradient KB batch linear regression correction factors (intercept 0)
+const PM25_BATCH_PRESETS: Pm25BatchPreset[] = [
+  { name: 'PMS5003_20231030', scalingFactor: 0.02838, factorText: '0.02838' },
+  { name: 'PMS5003_20231218', scalingFactor: 0.03525, factorText: '0.03525' },
+  { name: 'PMS5003_20240104', scalingFactor: 0.02896, factorText: '0.02896' },
+  { name: 'PMS5003T_20240921', scalingFactor: 0.03343, factorText: '0.03343' },
+  { name: 'PMS5003T_20240417', scalingFactor: 0.02799, factorText: '0.02799' },
+  { name: 'PMS5003T_20240518', scalingFactor: 0.03394, factorText: '0.03394' },
+  { name: 'PMS5003_20240826', scalingFactor: 0.03863, factorText: '0.03863' },
+  { name: 'PMS5003_20250116', scalingFactor: 0.02983, factorText: '0.02983' },
+  { name: 'PMS5003_20250530', scalingFactor: 0.02411, factorText: '0.02411' },
+  { name: 'PMS5003T_20250208', scalingFactor: 0.02719, factorText: '0.02719' },
+  { name: 'PMS5003T_20241222', scalingFactor: 0.0208, factorText: '0.02080' },
+  { name: 'PMS5003_20250720', scalingFactor: 0.004629, factorText: '0.004629' },
+  { name: 'PMS5003_20260225', scalingFactor: 0.004341, factorText: '0.004341' },
+  { name: 'PMS5003_20260410', scalingFactor: 0.005152, factorText: '0.005152' },
+  { name: 'PMS5003T_20260408', scalingFactor: 0.003964, factorText: '0.003964' },
+  { name: 'PMS5003_20251218', scalingFactor: 0.016522, factorText: '0.016522' },
+  { name: 'PMS5003_20260108', scalingFactor: 0.014934, factorText: '0.014934' },
+  { name: 'PMS5003_20260617', scalingFactor: 0.00508, factorText: '0.005080' },
+  { name: 'PMS5003T_20260923', scalingFactor: 0.00449, factorText: '0.004490' },
+];
+
+function formatPmReadbackLine(pm: Pm02CorrectionConfig | null): string {
+  if (!pm) return 'Monitor reports: unavailable (could not reach /config)';
+  const algo = pm.correctionAlgorithm || 'none';
+  if (!pm.slr) return `Monitor reports: ${algo}`;
+  const factor = typeof pm.slr.scalingFactor === 'number' ? pm.slr.scalingFactor : '--';
+  const offset = typeof pm.slr.intercept === 'number' ? pm.slr.intercept : 0;
+  const epa = pm.slr.useEpa2021 === false ? 'EPA off' : 'EPA on';
+  return `Monitor reports: ${algo} · factor ${factor} · offset ${offset} · ${epa}`;
+}
+
 function describeModel(modelCode?: string): string {
   if (!modelCode) return 'No monitor detected';
-  if (modelCode === 'I-9PSL') return 'AirGradient ONE (I-9PSL)';
-  if (modelCode === 'O-1PST') return 'AirGradient Open Air (O-1PST)';
+  if (modelCode === 'I-9PSL' || modelCode.startsWith('I-9PSL-')) {
+    return `AirGradient ONE (${modelCode})`;
+  }
+  if (modelCode === 'O-1PST' || modelCode.startsWith('O-1PST-')) {
+    return `AirGradient Open Air (${modelCode})`;
+  }
   if (modelCode === 'I-1DIY') return 'AirGradient DIY';
   return `AirGradient (${modelCode})`;
 }
@@ -313,6 +367,9 @@ export const SettingsView: React.FC<SettingsViewProps> = ({
     onTabChange?.(tab);
   };
   const [config, setConfig] = useState<DeviceConfig | null>(null);
+  const [reportedPm02, setReportedPm02] = useState<Pm02CorrectionConfig | null>(null);
+  const [pmScaleText, setPmScaleText] = useState<string>('1');
+  const [pmOffsetText, setPmOffsetText] = useState<string>('0');
   const [schedule, setSchedule] = useState<ScheduleConfig>(DEFAULT_SCHEDULE_CONFIG);
   const [loading, setLoading] = useState<boolean>(true);
   const [savingDevice, setSavingDevice] = useState<boolean>(false);
@@ -351,6 +408,35 @@ export const SettingsView: React.FC<SettingsViewProps> = ({
     return `HTTP ${res.status}`;
   };
 
+  const applyLoadedConfig = (data: DeviceConfig) => {
+    const loadedPm02 = (data.corrections?.pm02 as Pm02CorrectionConfig | undefined) ?? null;
+    setReportedPm02(loadedPm02);
+    setConfig({
+      ...DEFAULT_DEVICE_CONFIG,
+      ...data,
+      corrections: {
+        ...DEFAULT_DEVICE_CONFIG.corrections,
+        ...(data.corrections || {}),
+      },
+    });
+    const scaleVal = loadedPm02?.slr?.scalingFactor;
+    const offsetVal = loadedPm02?.slr?.intercept;
+    setPmScaleText(typeof scaleVal === 'number' ? String(scaleVal) : '1');
+    setPmOffsetText(typeof offsetVal === 'number' ? String(offsetVal) : '0');
+  };
+
+  const refreshConfigFromDevice = async () => {
+    try {
+      const cfgRes = await fetch(`${import.meta.env.BASE_URL}api/v1/config`);
+      if (cfgRes.ok) {
+        const data: DeviceConfig = await cfgRes.json();
+        applyLoadedConfig(data);
+      }
+    } catch {
+      // Non-fatal post-save readback skip; existing status banner remains visible
+    }
+  };
+
   const loadAllSettings = async () => {
     setLoading(true);
     try {
@@ -360,15 +446,8 @@ export const SettingsView: React.FC<SettingsViewProps> = ({
       ]);
 
       if (cfgRes.ok) {
-        const data = await cfgRes.json();
-        setConfig({
-          ...DEFAULT_DEVICE_CONFIG,
-          ...data,
-          corrections: {
-            ...DEFAULT_DEVICE_CONFIG.corrections,
-            ...(data.corrections || {}),
-          },
-        });
+        const data: DeviceConfig = await cfgRes.json();
+        applyLoadedConfig(data);
       } else {
         setConfig((prev) => prev ?? DEFAULT_DEVICE_CONFIG);
         setSaveStatus({
@@ -390,6 +469,78 @@ export const SettingsView: React.FC<SettingsViewProps> = ({
   const handleSaveDeviceNvs = async (e?: React.FormEvent) => {
     if (e) e.preventDefault();
     if (!config) return;
+
+    const curPm = config.corrections?.pm02 as Pm02CorrectionConfig | undefined;
+    const curPmAlgo = curPm?.correctionAlgorithm || 'none';
+    let nextPm02Payload: Pm02CorrectionConfig;
+
+    if (curPmAlgo === 'none' || curPmAlgo === 'epa_2021') {
+      nextPm02Payload = { correctionAlgorithm: curPmAlgo };
+    } else if (curPmAlgo === 'custom' || curPmAlgo.startsWith('slr_')) {
+      const parsedScale = Number(pmScaleText.trim());
+      const parsedOffset = Number(pmOffsetText.trim());
+      if (curPmAlgo === 'custom') {
+        if (
+          pmScaleText.trim() === '' ||
+          !Number.isFinite(parsedScale) ||
+          parsedScale <= 0 ||
+          parsedScale > 10
+        ) {
+          setSaveStatus({
+            type: 'error',
+            message: 'PM2.5 Scaling Factor must be greater than 0 and at most 10.',
+          });
+          return;
+        }
+        if (
+          pmOffsetText.trim() === '' ||
+          !Number.isFinite(parsedOffset) ||
+          parsedOffset < -100 ||
+          parsedOffset > 100
+        ) {
+          setSaveStatus({
+            type: 'error',
+            message: 'PM2.5 Offset must be between -100 and 100.',
+          });
+          return;
+        }
+      }
+      const scaleToSend =
+        curPmAlgo === 'custom'
+          ? parsedScale
+          : typeof curPm?.slr?.scalingFactor === 'number' &&
+            curPm.slr.scalingFactor > 0 &&
+            curPm.slr.scalingFactor <= 10
+          ? curPm.slr.scalingFactor
+          : 1;
+      const offsetToSend =
+        curPmAlgo === 'custom'
+          ? parsedOffset
+          : typeof curPm?.slr?.intercept === 'number' &&
+            curPm.slr.intercept >= -100 &&
+            curPm.slr.intercept <= 100
+          ? curPm.slr.intercept
+          : 0;
+      nextPm02Payload = {
+        correctionAlgorithm: curPmAlgo,
+        slr: {
+          intercept: offsetToSend,
+          scalingFactor: scaleToSend,
+          useEpa2021: curPm?.slr?.useEpa2021 ?? true,
+        },
+      };
+    } else if (curPmAlgo.startsWith('slr_') && !curPm?.slr) {
+      // Unknown/unmatched slr_<batch> with no SLR object in the read-back:
+      // forward the section untouched rather than fabricating defaults that
+      // would overwrite device-side SLR values the GET never surfaced.
+      nextPm02Payload = { correctionAlgorithm: curPmAlgo };
+    } else {
+      nextPm02Payload = {
+        correctionAlgorithm: curPmAlgo,
+        ...(curPm?.slr ? { slr: { ...curPm.slr } } : {}),
+      };
+    }
+
     setSavingDevice(true);
     setSaveStatus(null);
 
@@ -397,6 +548,10 @@ export const SettingsView: React.FC<SettingsViewProps> = ({
       const payload: Partial<DeviceConfig> = {
         ...config,
         configurationControl: config.configurationControl || 'local',
+        corrections: {
+          ...config.corrections,
+          pm02: nextPm02Payload as NonNullable<DeviceConfig['corrections']>['pm02'],
+        },
       };
       if (schedule.enabled) {
         delete payload.ledBarBrightness;
@@ -414,7 +569,7 @@ export const SettingsView: React.FC<SettingsViewProps> = ({
           message:
             'Device NVS settings written via PUT /config directly to AirGradient flash.',
         });
-        await onRefreshConfig();
+        await Promise.all([onRefreshConfig(), refreshConfigFromDevice()]);
       } else {
         throw new Error(await readErrorMessage(res));
       }
@@ -533,9 +688,221 @@ export const SettingsView: React.FC<SettingsViewProps> = ({
 
   const tempIntercept = config.corrections?.temp?.slr?.intercept ?? -1.2;
   const rhumIntercept = config.corrections?.rhum?.slr?.intercept ?? 3.0;
-  const pmAlgorithm = config.corrections?.pm02?.correctionAlgorithm ?? 'epa_2021';
+  const pmConfig = config.corrections?.pm02 as Pm02CorrectionConfig | undefined;
+  const pmAlgorithm = pmConfig?.correctionAlgorithm || 'none';
+  const pmUseEpa2021 = pmConfig?.slr?.useEpa2021 ?? true;
+  const pmActiveScale = pmConfig?.slr?.scalingFactor;
+  const pmActiveOffset = pmConfig?.slr?.intercept ?? 0;
   const tempAlgo = config.corrections?.temp?.correctionAlgorithm ?? 'ag_pms5003t_default';
   const rhumAlgo = config.corrections?.rhum?.correctionAlgorithm ?? 'ag_pms5003t_default';
+
+  const parsedPmScale = Number(pmScaleText.trim());
+  const pmScaleError =
+    pmAlgorithm !== 'custom'
+      ? null
+      : pmScaleText.trim() === '' || !Number.isFinite(parsedPmScale)
+      ? 'Enter a valid numeric scaling factor.'
+      : parsedPmScale <= 0 || parsedPmScale > 10
+      ? 'Scaling factor must be > 0 and ≤ 10.'
+      : null;
+
+  const parsedPmOffset = Number(pmOffsetText.trim());
+  const pmOffsetError =
+    pmAlgorithm !== 'custom'
+      ? null
+      : pmOffsetText.trim() === '' || !Number.isFinite(parsedPmOffset)
+      ? 'Enter a valid numeric offset.'
+      : parsedPmOffset < -100 || parsedPmOffset > 100
+      ? 'Offset must be between -100 and 100.'
+      : null;
+
+  const hasKnownPmPreset = PM25_BATCH_PRESETS.some(
+    (p) => `slr_${p.name}` === pmAlgorithm
+  );
+  const isExplicitPmOption =
+    hasKnownPmPreset ||
+    pmAlgorithm === 'custom' ||
+    pmAlgorithm === 'epa_2021' ||
+    pmAlgorithm === 'none';
+
+  const pmSelectOptions: { value: string; label: string }[] = [
+    ...(!isExplicitPmOption
+      ? [
+          {
+            value: pmAlgorithm,
+            label: `${pmAlgorithm} (reported by monitor)`,
+          },
+        ]
+      : []),
+    ...PM25_BATCH_PRESETS.map((p) => ({
+      value: `slr_${p.name}`,
+      label: `${p.name} (${p.factorText})`,
+    })),
+    { value: 'custom', label: 'Custom' },
+    { value: 'epa_2021', label: 'EPA 2021 (humidity-compensated raw)' },
+    { value: 'none', label: 'None' },
+  ];
+
+  const handlePmPresetChange = (nextAlgo: string) => {
+    const curPm = pmConfig;
+    const keepEpa = curPm?.slr?.useEpa2021 ?? true;
+
+    if (nextAlgo === 'none' || nextAlgo === 'epa_2021') {
+      const nextPm02: Pm02CorrectionConfig = {
+        correctionAlgorithm: nextAlgo,
+        ...(curPm?.slr ? { slr: { ...curPm.slr } } : {}),
+      };
+      setConfig({
+        ...config,
+        corrections: {
+          ...config.corrections,
+          pm02: nextPm02 as NonNullable<DeviceConfig['corrections']>['pm02'],
+        },
+      });
+      return;
+    }
+
+    if (nextAlgo === 'custom') {
+      const fallbackScale =
+        typeof curPm?.slr?.scalingFactor === 'number' &&
+        curPm.slr.scalingFactor > 0 &&
+        curPm.slr.scalingFactor <= 10
+          ? curPm.slr.scalingFactor
+          : 1;
+      const fallbackOffset =
+        typeof curPm?.slr?.intercept === 'number' &&
+        curPm.slr.intercept >= -100 &&
+        curPm.slr.intercept <= 100
+          ? curPm.slr.intercept
+          : 0;
+      const nextPm02: Pm02CorrectionConfig = {
+        correctionAlgorithm: 'custom',
+        slr: {
+          intercept: fallbackOffset,
+          scalingFactor: fallbackScale,
+          useEpa2021: keepEpa,
+        },
+      };
+      setPmScaleText(String(fallbackScale));
+      setPmOffsetText(String(fallbackOffset));
+      setConfig({
+        ...config,
+        corrections: {
+          ...config.corrections,
+          pm02: nextPm02 as NonNullable<DeviceConfig['corrections']>['pm02'],
+        },
+      });
+      return;
+    }
+
+    const preset = PM25_BATCH_PRESETS.find((p) => `slr_${p.name}` === nextAlgo);
+    const nextScale = preset
+      ? preset.scalingFactor
+      : typeof curPm?.slr?.scalingFactor === 'number' && curPm.slr.scalingFactor > 0
+      ? curPm.slr.scalingFactor
+      : 1;
+    const nextPm02: Pm02CorrectionConfig = {
+      correctionAlgorithm: nextAlgo,
+      slr: {
+        intercept: preset ? 0 : curPm?.slr?.intercept ?? 0,
+        scalingFactor: nextScale,
+        useEpa2021: keepEpa,
+      },
+    };
+    setPmScaleText(preset ? preset.factorText : String(nextScale));
+    setPmOffsetText(preset ? '0' : String(nextPm02.slr?.intercept ?? 0));
+    setConfig({
+      ...config,
+      corrections: {
+        ...config.corrections,
+        pm02: nextPm02 as NonNullable<DeviceConfig['corrections']>['pm02'],
+      },
+    });
+  };
+
+  const handlePmUseEpaChange = (checked: boolean) => {
+    // In none/epa_2021 modes no slr object is ever sent (the save path strips
+    // it), so ignore toggles there to keep checkbox state and payload in sync.
+    if (pmAlgorithm === 'none' || pmAlgorithm === 'epa_2021') {
+      return;
+    }
+    const preset = PM25_BATCH_PRESETS.find((p) => `slr_${p.name}` === pmAlgorithm);
+    const currentScale =
+      typeof pmConfig?.slr?.scalingFactor === 'number' && pmConfig.slr.scalingFactor > 0
+        ? pmConfig.slr.scalingFactor
+        : preset
+        ? preset.scalingFactor
+        : 1;
+    const currentOffset =
+      typeof pmConfig?.slr?.intercept === 'number' ? pmConfig.slr.intercept : 0;
+
+    const nextPm02: Pm02CorrectionConfig = {
+      correctionAlgorithm: pmAlgorithm,
+      slr: {
+        intercept: currentOffset,
+        scalingFactor: currentScale,
+        useEpa2021: checked,
+      },
+    };
+    setConfig({
+      ...config,
+      corrections: {
+        ...config.corrections,
+        pm02: nextPm02 as NonNullable<DeviceConfig['corrections']>['pm02'],
+      },
+    });
+  };
+
+  const handlePmScaleTextChange = (raw: string) => {
+    setPmScaleText(raw);
+    const parsed = Number(raw.trim());
+    if (raw.trim() === '' || !Number.isFinite(parsed) || parsed <= 0 || parsed > 10) {
+      return;
+    }
+    const nextPm02: Pm02CorrectionConfig = {
+      correctionAlgorithm: 'custom',
+      slr: {
+        intercept:
+          typeof pmConfig?.slr?.intercept === 'number' ? pmConfig.slr.intercept : 0,
+        scalingFactor: parsed,
+        useEpa2021: pmUseEpa2021,
+      },
+    };
+    setConfig({
+      ...config,
+      corrections: {
+        ...config.corrections,
+        pm02: nextPm02 as NonNullable<DeviceConfig['corrections']>['pm02'],
+      },
+    });
+  };
+
+  const handlePmOffsetTextChange = (raw: string) => {
+    setPmOffsetText(raw);
+    const parsed = Number(raw.trim());
+    if (raw.trim() === '' || !Number.isFinite(parsed) || parsed < -100 || parsed > 100) {
+      return;
+    }
+    const nextPm02: Pm02CorrectionConfig = {
+      correctionAlgorithm: 'custom',
+      slr: {
+        intercept: parsed,
+        scalingFactor:
+          typeof pmConfig?.slr?.scalingFactor === 'number' &&
+          pmConfig.slr.scalingFactor > 0
+            ? pmConfig.slr.scalingFactor
+            : 1,
+        useEpa2021: pmUseEpa2021,
+      },
+    };
+    setConfig({
+      ...config,
+      corrections: {
+        ...config.corrections,
+        pm02: nextPm02 as NonNullable<DeviceConfig['corrections']>['pm02'],
+      },
+    });
+  };
 
   return (
     <div className="space-y-4 sm:space-y-5 max-w-4xl mx-auto px-4 sm:px-6 py-4 sm:py-6">
@@ -550,7 +917,7 @@ export const SettingsView: React.FC<SettingsViewProps> = ({
           </div>
           <div className="flex flex-wrap items-center gap-x-2 gap-y-1 text-xs text-[#9ca3af] mt-1 font-mono">
             <span className="font-sans" title="Detected AirGradient monitor hardware model">
-              {describeModel(detectedDevice?.model || config.model)}
+              {describeModel(config.model || detectedDevice?.model)}
             </span>
             <span aria-hidden="true">·</span>
             <span title="Installed AirGradient ESP32 firmware version">
@@ -1075,27 +1442,109 @@ export const SettingsView: React.FC<SettingsViewProps> = ({
               </p>
             </div>
 
-            <div className="max-w-md">
-              <MatSelect
-                label="PM2.5 Correction Algorithm"
-                value={pmAlgorithm}
-                onChange={(v) =>
-                  setConfig({
-                    ...config,
-                    corrections: {
-                      ...config.corrections,
-                      pm02: { correctionAlgorithm: v },
-                    },
-                  })
-                }
-                options={[
-                  {
-                    value: 'epa_2021',
-                    label: 'US EPA 2021 Humidity-Compensated',
-                  },
-                  { value: 'none', label: 'None (Raw PMS5003)' },
-                ]}
-              />
+            {/* PM2.5 Calibration */}
+            <div className="rounded-xl bg-[#14171d] border border-white/[0.1] p-4 space-y-4">
+              <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-1.5">
+                <div>
+                  <h3 className="text-[13px] font-semibold text-white font-display">
+                    PM2.5 Calibration
+                  </h3>
+                  <p className="text-xs text-[#8f96a6] mt-0.5">
+                    PMS5003 batch linear correction factor with optional US EPA 2021 humidity compensation.
+                  </p>
+                </div>
+                {pmAlgorithm !== 'custom' &&
+                  pmAlgorithm !== 'none' &&
+                  pmAlgorithm !== 'epa_2021' &&
+                  typeof pmActiveScale === 'number' && (
+                    <span className="text-[11px] font-mono tabular-nums text-[#93c5fd] bg-[#1e3a5f]/50 border border-[#60a5fa]/25 rounded-md px-2 py-0.5 w-fit shrink-0">
+                      factor {pmActiveScale} · offset {pmActiveOffset}
+                    </span>
+                  )}
+              </div>
+
+              <div className="grid grid-cols-1 md:grid-cols-2 gap-4 items-start">
+                <MatSelect
+                  label="Correction Preset"
+                  value={pmAlgorithm}
+                  onChange={handlePmPresetChange}
+                  options={pmSelectOptions}
+                  hint={
+                    pmAlgorithm === 'none'
+                      ? 'Uses raw uncompensated PMS5003 readings.'
+                      : pmAlgorithm === 'custom'
+                      ? 'Applies custom scaling factor and offset to PM0.3 particle count.'
+                      : pmAlgorithm === 'epa_2021'
+                      ? 'Applies US EPA 2021 humidity compensation to raw PM2.5.'
+                      : !isExplicitPmOption
+                      ? 'Monitor-reported algorithm preserved verbatim until changed.'
+                      : 'Applies AirGradient batch linear regression calibration.'
+                  }
+                />
+
+                <div className="md:pt-[22px]">
+                  <MatCheckbox
+                    checked={pmUseEpa2021}
+                    onChange={handlePmUseEpaChange}
+                    label="Apply EPA Formula"
+                    description={
+                      pmAlgorithm === 'none'
+                        ? 'Inactive while PM2.5 correction is set to None.'
+                        : pmAlgorithm === 'epa_2021'
+                        ? 'Included automatically by EPA 2021 mode; switch to a batch preset or Custom to toggle independently.'
+                        : 'Applies US EPA 2021 humidity compensation after scaling.'
+                    }
+                    className={
+                      pmAlgorithm === 'none' || pmAlgorithm === 'epa_2021'
+                        ? 'opacity-60'
+                        : ''
+                    }
+                  />
+                </div>
+              </div>
+
+              {pmAlgorithm === 'custom' && (
+                <div className="grid grid-cols-1 sm:grid-cols-2 gap-4 pt-1">
+                  <MatTextField
+                    type="number"
+                    step="any"
+                    mono
+                    label="Scaling Factor"
+                    value={pmScaleText}
+                    onChange={handlePmScaleTextChange}
+                    placeholder="0.022739"
+                    hint={
+                      pmScaleError ? (
+                        <span className="text-rose-400">{pmScaleError}</span>
+                      ) : (
+                        'Valid range: > 0 to 10'
+                      )
+                    }
+                  />
+                  <MatTextField
+                    type="number"
+                    step="any"
+                    mono
+                    label="Offset (µg/m³)"
+                    value={pmOffsetText}
+                    onChange={handlePmOffsetTextChange}
+                    placeholder="0"
+                    hint={
+                      pmOffsetError ? (
+                        <span className="text-rose-400">{pmOffsetError}</span>
+                      ) : (
+                        'Valid range: -100 to 100 (default 0)'
+                      )
+                    }
+                  />
+                </div>
+              )}
+
+              <div className="pt-2.5 border-t border-white/[0.08] text-[11px] text-[#8f96a6] font-mono">
+                <span title="Authoritative PM2.5 calibration state returned by GET /api/v1/config">
+                  {formatPmReadbackLine(reportedPm02)}
+                </span>
+              </div>
             </div>
 
             <div className="grid grid-cols-1 md:grid-cols-2 gap-5 sm:gap-6">
@@ -1212,7 +1661,7 @@ export const SettingsView: React.FC<SettingsViewProps> = ({
               <MatButton
                 type="submit"
                 variant="filled"
-                disabled={savingDevice}
+                disabled={savingDevice || Boolean(pmScaleError || pmOffsetError)}
                 className="w-full sm:w-auto"
                 icon={
                   savingDevice ? <RefreshCw className="w-3.5 h-3.5 animate-spin" /> : undefined
@@ -1278,14 +1727,14 @@ export const SettingsView: React.FC<SettingsViewProps> = ({
             <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-4 sm:gap-5">
               <div
                 className="min-w-0 cursor-help"
-                title="Hardware variant reported by /measures/current"
+                title="Hardware variant reported by /config or /measures/current"
               >
                 <span className="text-xs text-[#8f96a6] block">Hardware Model</span>
                 <span className="text-sm font-semibold text-white mt-1 block truncate">
-                  {describeModel(detectedDevice?.model || config.model)}
+                  {describeModel(config.model || detectedDevice?.model)}
                 </span>
                 <span className="text-xs text-[#9ca3af] font-mono mt-0.5 block">
-                  ID: {detectedDevice?.model || config.model || '--'}
+                  ID: {config.model || detectedDevice?.model || '--'}
                 </span>
               </div>
 

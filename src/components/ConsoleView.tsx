@@ -1,4 +1,4 @@
-import React, { useState, useEffect, useMemo, useRef } from 'react';
+import React, { useState, useEffect, useMemo, useRef, useId } from 'react';
 import {
   Chart as ChartJS,
   CategoryScale,
@@ -21,6 +21,8 @@ import {
   SlidersHorizontal,
   Download,
   Database,
+  Calendar,
+  AlertCircle,
   HelpCircle,
   WifiOff,
 } from 'lucide-react';
@@ -144,11 +146,69 @@ const LIVE_CADENCE_SEC: Record<TimeRangePreset, number> = {
   '30d': 60,
 };
 
+const MAX_RAW_EXPORT_RANGE_SEC = 366 * 86400;
+
 function formatWindowDuration(points: number, intervalSec: number): string {
   const sec = points * intervalSec;
   if (sec < 60) return `${sec}s`;
   if (sec < 3600) return `${Number((sec / 60).toFixed(1))}m`;
   return `${Number((sec / 3600).toFixed(1))}h`;
+}
+
+function formatDateTimeLocal(date: Date): string {
+  const pad = (n: number) => String(n).padStart(2, '0');
+  const y = date.getFullYear();
+  const m = pad(date.getMonth() + 1);
+  const d = pad(date.getDate());
+  const hh = pad(date.getHours());
+  const mm = pad(date.getMinutes());
+  return `${y}-${m}-${d}T${hh}:${mm}`;
+}
+
+function getDefaultCustomExportRange(): { start: string; end: string } {
+  const now = new Date();
+  const start = new Date(now.getTime() - 86400 * 1000);
+  return {
+    start: formatDateTimeLocal(start),
+    end: formatDateTimeLocal(now),
+  };
+}
+
+function parseDateTimeLocalToUnixSec(value: string): number | null {
+  const match = /^(\d{4})-(\d{2})-(\d{2})T(\d{2}):(\d{2})(?::(\d{2}))?$/.exec(value.trim());
+  if (!match) return null;
+  const [, y, m, d, hh, mm, ss] = match;
+  const dt = new Date(
+    Number(y),
+    Number(m) - 1,
+    Number(d),
+    Number(hh),
+    Number(mm),
+    ss ? Number(ss) : 0,
+    0
+  );
+  if (Number.isNaN(dt.getTime())) return null;
+  if (
+    dt.getFullYear() !== Number(y) ||
+    dt.getMonth() !== Number(m) - 1 ||
+    dt.getDate() !== Number(d)
+  ) {
+    return null;
+  }
+  return Math.floor(dt.getTime() / 1000);
+}
+
+function formatExportSpan(seconds: number): string {
+  const mins = Math.round(seconds / 60);
+  if (mins < 60) return `${mins}m`;
+  const totalHours = Math.floor(mins / 60);
+  const remMins = mins % 60;
+  if (totalHours < 48) {
+    return remMins > 0 ? `${totalHours}h ${remMins}m` : `${totalHours}h`;
+  }
+  const days = Math.floor(totalHours / 24);
+  const remHours = totalHours % 24;
+  return remHours > 0 ? `${days}d ${remHours}h` : `${days}d`;
 }
 
 const MOVING_AVG_WINDOWS: MovingAvgWindow[] = [5, 15, 30];
@@ -213,7 +273,15 @@ export const ConsoleView: React.FC<ConsoleViewProps> = ({
   }, [analyticsTools]);
 
   const [liveBuffer, setLiveBuffer] = useState<HistoricalPoint[]>([]);
-  const [isExportingRaw, setIsExportingRaw] = useState<boolean>(false);
+  const [exportingRawSource, setExportingRawSource] = useState<'preset' | 'custom' | null>(null);
+  const [customRange, setCustomRange] = useState<{ start: string; end: string }>(() =>
+    getDefaultCustomExportRange()
+  );
+  const [customRangeTouched, setCustomRangeTouched] = useState<boolean>(false);
+  const customStartId = useId();
+  const customEndId = useId();
+  const customRangeMsgId = useId();
+  const exportResetTimerRef = useRef<number | null>(null);
   const fetchSeqRef = useRef<number>(0);
   const liveTailTsRef = useRef<number>(0);
   const backfillInFlightRef = useRef<Set<string>>(new Set());
@@ -1152,31 +1220,79 @@ export const ConsoleView: React.FC<ConsoleViewProps> = ({
     URL.revokeObjectURL(url);
   };
 
-  // Raw archive export: stream the full-fidelity 14-column raw sensor archive
-  // for the active window straight from the gateway via a download anchor —
-  // the browser streams the Content-Disposition response to disk without
-  // buffering the whole CSV in memory
-  const handleExportRawCsv = () => {
-    if (activeData.length === 0 || isExportingRaw) return;
-    setIsExportingRaw(true);
-    try {
+  useEffect(() => {
+    return () => {
+      if (exportResetTimerRef.current !== null) {
+        window.clearTimeout(exportResetTimerRef.current);
+      }
+    };
+  }, []);
+
+  // Raw archive export: stream the full-fidelity 23-column raw sensor archive
+  // for either the active preset window or a custom date/time range straight
+  // from the gateway via a download anchor — the browser streams the
+  // Content-Disposition response to disk without buffering CSV in memory
+  const handleExportRawCsv = (customBounds?: { start: number; end: number }) => {
+    if (exportingRawSource !== null) return;
+    const isCustom = Boolean(customBounds);
+    if (!isCustom && activeData.length === 0) return;
+
+    let rangeStart: number;
+    let rangeEnd: number;
+    if (customBounds) {
+      if (
+        customBounds.start <= 0 ||
+        customBounds.end <= customBounds.start ||
+        customBounds.end - customBounds.start > MAX_RAW_EXPORT_RANGE_SEC
+      ) {
+        return;
+      }
+      rangeStart = customBounds.start;
+      rangeEnd = customBounds.end;
+    } else {
       // Live view (5m): export up to "now". Historical presets: cover the full
       // requested window — the newest bucket's start timestamp alone would
       // truncate up to interval-1 seconds (or everything with one bucket).
-      const rangeEnd = isLiveStreaming
+      rangeEnd = isLiveStreaming
         ? Math.floor(Date.now() / 1000)
         : activeData[activeData.length - 1].timestamp + RANGE_INTERVAL_SEC[rangePreset] - 1;
-      const rangeStart = isLiveStreaming
+      rangeStart = isLiveStreaming
         ? rangeEnd - RANGE_WINDOW_SEC[rangePreset]
         : activeData[0].timestamp;
-      const a = document.createElement('a');
-      a.href = `${import.meta.env.BASE_URL}api/v1/export.csv?start=${rangeStart}&end=${rangeEnd}`;
-      a.download = `pigradient_raw_${rangeStart}-${rangeEnd}.csv`;
-      a.click();
-    } finally {
-      setIsExportingRaw(false);
     }
+
+    setExportingRawSource(isCustom ? 'custom' : 'preset');
+    if (exportResetTimerRef.current !== null) {
+      window.clearTimeout(exportResetTimerRef.current);
+    }
+    const a = document.createElement('a');
+    a.href = `${import.meta.env.BASE_URL}api/v1/export.csv?start=${rangeStart}&end=${rangeEnd}`;
+    a.download = `pigradient_raw_${rangeStart}-${rangeEnd}.csv`;
+    a.click();
+    exportResetTimerRef.current = window.setTimeout(() => {
+      setExportingRawSource(null);
+      exportResetTimerRef.current = null;
+    }, 650);
   };
+
+  const customRangeStartUnix = parseDateTimeLocalToUnixSec(customRange.start);
+  const customRangeEndUnix = parseDateTimeLocalToUnixSec(customRange.end);
+  const customRangeError =
+    customRangeStartUnix === null || customRangeEndUnix === null
+      ? 'Select both start and end date & time.'
+      : customRangeStartUnix <= 0 || customRangeEndUnix <= 0
+      ? 'Dates must be after 1970.'
+      : customRangeEndUnix <= customRangeStartUnix
+      ? 'End time must be after start time.'
+      : customRangeEndUnix - customRangeStartUnix > MAX_RAW_EXPORT_RANGE_SEC
+      ? 'Export window cannot exceed 366 days.'
+      : null;
+  const customRangeSpanLabel =
+    customRangeError === null &&
+    customRangeStartUnix !== null &&
+    customRangeEndUnix !== null
+      ? formatExportSpan(customRangeEndUnix - customRangeStartUnix)
+      : null;
 
   const chartOptions: ChartOptions<'line'> = {
     responsive: true,
@@ -1816,9 +1932,17 @@ export const ConsoleView: React.FC<ConsoleViewProps> = ({
                 variant={showAnalyticsPanel || hasActiveAnalytics ? 'tonal' : 'text'}
                 size="sm"
                 className="!px-2.5"
-                onClick={() => setShowAnalyticsPanel((prev) => !prev)}
+                onClick={() => {
+                  setShowAnalyticsPanel((prev) => {
+                    const next = !prev;
+                    if (next && !customRangeTouched) {
+                      setCustomRange(getDefaultCustomExportRange());
+                    }
+                    return next;
+                  });
+                }}
                 aria-expanded={showAnalyticsPanel}
-                title="Toggle analytical overlays, moving averages, rolling-only mode, thresholds, and stats table"
+                title="Toggle analytical overlays, moving averages, thresholds, CSV exports, and stats table"
                 icon={<SlidersHorizontal className="w-3.5 h-3.5" aria-hidden="true" />}
               >
                 Analytics
@@ -1950,17 +2074,141 @@ export const ConsoleView: React.FC<ConsoleViewProps> = ({
                   <MatButton
                     variant="outlined"
                     size="sm"
-                    onClick={handleExportRawCsv}
-                    disabled={activeData.length === 0 || isExportingRaw}
-                    title="Stream the full-fidelity 14-column raw sensor archive for the active time window from the gateway as CSV"
-                    icon={<Database className="w-3.5 h-3.5" aria-hidden="true" />}
+                    onClick={() => handleExportRawCsv()}
+                    disabled={activeData.length === 0 || exportingRawSource !== null}
+                    title="Stream the full-fidelity 23-column raw sensor archive for the active time window from the gateway as CSV"
+                    icon={
+                      exportingRawSource === 'preset' ? (
+                        <RefreshCw className="w-3.5 h-3.5 animate-spin" aria-hidden="true" />
+                      ) : (
+                        <Database className="w-3.5 h-3.5" aria-hidden="true" />
+                      )
+                    }
                   >
-                    {isExportingRaw ? 'Exporting…' : 'Raw Archive CSV (full fidelity)'}
+                    {exportingRawSource === 'preset' ? 'Exporting…' : 'Raw Archive CSV (full fidelity)'}
                   </MatButton>
                   <span className="text-[10px] text-[#7e8596] text-right leading-tight">
                     Chart CSV exports the downsampled points on screen · Raw Archive CSV
                     streams every archived 1s sample for the window
                   </span>
+                </div>
+              </div>
+
+              <MatDivider />
+
+              {/* Custom Date-Range Raw Archive Export */}
+              <div className="flex flex-col lg:flex-row lg:items-center justify-between gap-3">
+                <div className="min-w-0">
+                  <div className="flex items-center gap-1.5 text-xs font-medium text-[#cbd5e1]">
+                    <Calendar className="w-3.5 h-3.5 text-[#60a5fa] shrink-0" aria-hidden="true" />
+                    <span>Custom Range CSV</span>
+                    <span className="text-[11px] font-normal text-[#7e8596]">
+                      · 1s raw archive
+                    </span>
+                  </div>
+                  <p
+                    id={customRangeMsgId}
+                    role={customRangeError ? 'status' : undefined}
+                    aria-live="polite"
+                    className={`mt-0.5 text-[11px] leading-tight flex items-center gap-1 ${
+                      customRangeError ? 'text-rose-400' : 'text-[#7e8596]'
+                    }`}
+                  >
+                    {customRangeError ? (
+                      <>
+                        <AlertCircle className="w-3 h-3 shrink-0" aria-hidden="true" />
+                        <span>{customRangeError}</span>
+                      </>
+                    ) : (
+                      <span>
+                        Window:{' '}
+                        <span className="font-mono text-[#9ca3af]">{customRangeSpanLabel}</span>{' '}
+                        · streams full-fidelity 23-column CSV
+                      </span>
+                    )}
+                  </p>
+                </div>
+
+                <div className="flex flex-col md:flex-row md:items-end gap-2">
+                  <div className="grid grid-cols-1 sm:grid-cols-2 gap-2">
+                    <div className="flex flex-col gap-1 min-w-0">
+                      <label
+                        htmlFor={customStartId}
+                        className="text-[11px] font-medium text-[#9ca3af]"
+                      >
+                        Start
+                      </label>
+                      <input
+                        id={customStartId}
+                        type="datetime-local"
+                        value={customRange.start}
+                        onChange={(e) => {
+                          setCustomRangeTouched(true);
+                          setCustomRange((prev) => ({ ...prev, start: e.target.value }));
+                        }}
+                        aria-invalid={Boolean(customRangeError) || undefined}
+                        aria-describedby={customRangeMsgId}
+                        className={`w-full md:w-auto min-h-[38px] sm:min-h-[36px] px-2.5 py-1.5 bg-[#12151b] border rounded-lg text-xs font-mono tabular-nums text-[#e6e8ee] [color-scheme:dark] focus:outline-none transition-colors ${
+                          customRangeError
+                            ? 'border-rose-500/60 focus:border-rose-400 focus:ring-1 focus:ring-rose-400/50'
+                            : 'border-white/[0.18] hover:border-white/[0.3] focus:border-[#60a5fa] focus:ring-1 focus:ring-[#60a5fa]/60'
+                        }`}
+                      />
+                    </div>
+                    <div className="flex flex-col gap-1 min-w-0">
+                      <label
+                        htmlFor={customEndId}
+                        className="text-[11px] font-medium text-[#9ca3af]"
+                      >
+                        End
+                      </label>
+                      <input
+                        id={customEndId}
+                        type="datetime-local"
+                        value={customRange.end}
+                        onChange={(e) => {
+                          setCustomRangeTouched(true);
+                          setCustomRange((prev) => ({ ...prev, end: e.target.value }));
+                        }}
+                        aria-invalid={Boolean(customRangeError) || undefined}
+                        aria-describedby={customRangeMsgId}
+                        className={`w-full md:w-auto min-h-[38px] sm:min-h-[36px] px-2.5 py-1.5 bg-[#12151b] border rounded-lg text-xs font-mono tabular-nums text-[#e6e8ee] [color-scheme:dark] focus:outline-none transition-colors ${
+                          customRangeError
+                            ? 'border-rose-500/60 focus:border-rose-400 focus:ring-1 focus:ring-rose-400/50'
+                            : 'border-white/[0.18] hover:border-white/[0.3] focus:border-[#60a5fa] focus:ring-1 focus:ring-[#60a5fa]/60'
+                        }`}
+                      />
+                    </div>
+                  </div>
+
+                  <MatButton
+                    variant="outlined"
+                    size="sm"
+                    onClick={() => {
+                      if (
+                        customRangeError === null &&
+                        customRangeStartUnix !== null &&
+                        customRangeEndUnix !== null
+                      ) {
+                        handleExportRawCsv({
+                          start: customRangeStartUnix,
+                          end: customRangeEndUnix,
+                        });
+                      }
+                    }}
+                    disabled={Boolean(customRangeError) || exportingRawSource !== null}
+                    title="Stream the full-fidelity 23-column raw sensor archive for the selected date and time range as CSV"
+                    className="w-full md:w-auto"
+                    icon={
+                      exportingRawSource === 'custom' ? (
+                        <RefreshCw className="w-3.5 h-3.5 animate-spin" aria-hidden="true" />
+                      ) : (
+                        <Download className="w-3.5 h-3.5" aria-hidden="true" />
+                      )
+                    }
+                  >
+                    {exportingRawSource === 'custom' ? 'Exporting…' : 'Export Range CSV'}
+                  </MatButton>
                 </div>
               </div>
 
