@@ -208,7 +208,7 @@ const OledDisplayPreview: React.FC<{
           {/* Top Row: Temperature & Relative Humidity */}
           <g
             fill="#ffffff"
-            fontFamily="'DM Sans', 'Inter', system-ui, -apple-system, sans-serif"
+            fontFamily="system-ui, -apple-system, sans-serif"
             fontSize="22"
             fontWeight="500"
           >
@@ -230,7 +230,7 @@ const OledDisplayPreview: React.FC<{
           {/* Column 1: CO2 */}
           <g
             fill="#ffffff"
-            fontFamily="'DM Sans', 'Inter', system-ui, -apple-system, sans-serif"
+            fontFamily="system-ui, -apple-system, sans-serif"
           >
             <text x="9" y="61" fontSize="18" fontWeight="500">
               CO2
@@ -246,7 +246,7 @@ const OledDisplayPreview: React.FC<{
           {/* Column 2: PM2.5 */}
           <g
             fill="#ffffff"
-            fontFamily="'DM Sans', 'Inter', system-ui, -apple-system, sans-serif"
+            fontFamily="system-ui, -apple-system, sans-serif"
           >
             <text x="97" y="61" fontSize="18" fontWeight="500">
               PM2.5
@@ -265,7 +265,7 @@ const OledDisplayPreview: React.FC<{
           {/* Column 3: TVOC */}
           <g
             fill="#ffffff"
-            fontFamily="'DM Sans', 'Inter', system-ui, -apple-system, sans-serif"
+            fontFamily="system-ui, -apple-system, sans-serif"
           >
             <text x="186" y="61" fontSize="18" fontWeight="500">
               TVOC

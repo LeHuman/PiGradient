@@ -115,7 +115,7 @@ Great for a compact `1h` (`interval=30` or `60`) sparkline inside the flyout!
 - **Backgrounds**: Outer `#111318`, Card Tile `#181B22`, Subtle Border `rgba(255, 255, 255, 0.08)`, Header Strip `#14171D`
 - **Primary Accent**: `#2563EB` / `#60A5FA`
 - **Text**: Primary `#E6E8EE` / `#FFFFFF`, Secondary `#9CA3AF`, Muted `#7E8596`
-- **Fonts**: `'Plus Jakarta Sans'` (headers), `'DM Sans'` / `'Segoe UI Variable'` (body labels), `'JetBrains Mono'` (`font-variant-numeric: tabular-nums` for all live metrics)
+- **Fonts**: system sans stack (`system-ui` / `Segoe UI Variable`) for headers & body labels, `ui-monospace` / `Consolas` stack (`font-variant-numeric: tabular-nums`) for all live metrics
 
 ---
 

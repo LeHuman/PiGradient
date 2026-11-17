@@ -160,7 +160,7 @@ Day/Night automated dimming managed by Raspberry Pi daemon:
   - Elevated Surface / Bar: `#14171D`
   - Primary Accent: `#2563EB` (action fills) / `#60A5FA` (text/icons)
   - Text Primary: `#FFFFFF` / `#E6E8EE`, Secondary: `#9CA3AF`, Muted: `#7E8596`
-- **Typography**: Clean geometric sans (`Plus Jakarta Sans` / system sans) for headings & labels + `JetBrains Mono` (tabular figures `fontFeatureSettings = "tnum"`) for all numeric telemetry values.
+- **Typography**: System sans stack (`system-ui`) for headings & labels + `ui-monospace` / `Consolas` (tabular figures `fontFeatureSettings = "tnum"`) for all numeric telemetry values.
 
 ---
 

@@ -1027,7 +1027,7 @@ export const ConsoleView: React.FC<ConsoleViewProps> = ({
           }
 
           ctx.save();
-          ctx.font = '600 10px "JetBrains Mono", monospace';
+          ctx.font = '600 10px ui-monospace, Consolas, Menlo, monospace';
           ctx.textBaseline = 'middle';
 
           for (let i = 0; i < sorted.length; i++) {
@@ -1191,7 +1191,7 @@ export const ConsoleView: React.FC<ConsoleViewProps> = ({
         position: 'top',
         labels: {
           color: '#CBD5E1',
-          font: { family: 'DM Sans', size: 11 },
+          font: { family: 'system-ui, sans-serif', size: 11 },
           usePointStyle: prefs.colorblindSafe,
           boxWidth: prefs.colorblindSafe ? 10 : 16,
           boxHeight: prefs.colorblindSafe ? 8 : 3,
@@ -1222,8 +1222,8 @@ export const ConsoleView: React.FC<ConsoleViewProps> = ({
         borderColor: 'rgba(148,163,184,0.22)',
         borderWidth: 1,
         padding: 10,
-        bodyFont: { family: 'JetBrains Mono', size: 11 },
-        titleFont: { family: 'DM Sans', size: 11, weight: 'bold' },
+        bodyFont: { family: 'ui-monospace, Consolas, Menlo, monospace', size: 11 },
+        titleFont: { family: 'system-ui, sans-serif', size: 11, weight: 'bold' },
       },
     },
     scales: {
@@ -1231,7 +1231,7 @@ export const ConsoleView: React.FC<ConsoleViewProps> = ({
         grid: { color: 'rgba(148, 163, 184, 0.08)' },
         ticks: {
           color: '#7e8596',
-          font: { family: 'JetBrains Mono', size: 10 },
+          font: { family: 'ui-monospace, Consolas, Menlo, monospace', size: 10 },
           maxRotation: 0,
           autoSkip: true,
           maxTicksLimit: 8,
@@ -1243,7 +1243,7 @@ export const ConsoleView: React.FC<ConsoleViewProps> = ({
         position: 'left',
         title: { display: true, text: 'CO₂ (ppm)', color: '#60a5fa', font: { size: 10 } },
         grid: { color: 'rgba(148, 163, 184, 0.1)' },
-        ticks: { color: '#9ca3af', font: { family: 'JetBrains Mono', size: 10 } },
+        ticks: { color: '#9ca3af', font: { family: 'ui-monospace, Consolas, Menlo, monospace', size: 10 } },
       },
       y1: {
         type: 'linear',
@@ -1256,49 +1256,49 @@ export const ConsoleView: React.FC<ConsoleViewProps> = ({
           font: { size: 10 },
         },
         grid: { drawOnChartArea: false },
-        ticks: { color: '#9ca3af', font: { family: 'JetBrains Mono', size: 10 } },
+        ticks: { color: '#9ca3af', font: { family: 'ui-monospace, Consolas, Menlo, monospace', size: 10 } },
       },
       yTemp: {
         type: 'linear',
         display: axes.showTemp || axes.showDewPoint || axes.showHeatIndex,
         position: 'right',
         grid: { drawOnChartArea: false },
-        ticks: { color: '#F59E0B', font: { family: 'JetBrains Mono', size: 10 } },
+        ticks: { color: '#F59E0B', font: { family: 'ui-monospace, Consolas, Menlo, monospace', size: 10 } },
       },
       yHum: {
         type: 'linear',
         display: axes.showHum,
         position: 'right',
         grid: { drawOnChartArea: false },
-        ticks: { color: '#06B6D4', font: { family: 'JetBrains Mono', size: 10 } },
+        ticks: { color: '#06B6D4', font: { family: 'ui-monospace, Consolas, Menlo, monospace', size: 10 } },
       },
       yTvoc: {
         type: 'linear',
         display: axes.showTvoc,
         position: 'left',
         grid: { drawOnChartArea: false },
-        ticks: { color: '#8B5CF6', font: { family: 'JetBrains Mono', size: 10 } },
+        ticks: { color: '#8B5CF6', font: { family: 'ui-monospace, Consolas, Menlo, monospace', size: 10 } },
       },
       yNox: {
         type: 'linear',
         display: axes.showNox,
         position: 'left',
         grid: { drawOnChartArea: false },
-        ticks: { color: '#EC4899', font: { family: 'JetBrains Mono', size: 10 } },
+        ticks: { color: '#EC4899', font: { family: 'ui-monospace, Consolas, Menlo, monospace', size: 10 } },
       },
       yAqi: {
         type: 'linear',
         display: axes.showAqi,
         position: 'right',
         grid: { drawOnChartArea: false },
-        ticks: { color: '#F97316', font: { family: 'JetBrains Mono', size: 10 } },
+        ticks: { color: '#F97316', font: { family: 'ui-monospace, Consolas, Menlo, monospace', size: 10 } },
       },
       yAbsHum: {
         type: 'linear',
         display: axes.showAbsHumidity,
         position: 'right',
         grid: { drawOnChartArea: false },
-        ticks: { color: '#14B8A6', font: { family: 'JetBrains Mono', size: 10 } },
+        ticks: { color: '#14B8A6', font: { family: 'ui-monospace, Consolas, Menlo, monospace', size: 10 } },
       },
     },
   };
