@@ -51,15 +51,27 @@ func validateConfigField(key string, val any) bool {
 		s, ok := val.(string)
 		return ok && (s == "ugm3" || s == "us-aqi")
 	case "ledBarMode":
+		// Firmware (AgConfigure getLedBarModeString): co2, pm, off, iaqs.
 		s, ok := val.(string)
-		return ok && (s == "pm" || s == "co2" || s == "off")
+		return ok && (s == "pm" || s == "co2" || s == "off" || s == "iaqs")
 	case "temperatureUnit":
 		s, ok := val.(string)
 		return ok && (s == "c" || s == "f")
 	case "configurationControl":
 		s, ok := val.(string)
 		return ok && (s == "local" || s == "cloud" || s == "both")
-	case "country", "mqttBrokerUrl":
+	case "country", "mqttBrokerUrl", "httpDomain", "cellOperators":
+		s, ok := val.(string)
+		return ok && len(s) <= 512
+	case "extendedPmMeasures":
+		_, ok := val.(bool)
+		return ok
+	case "model":
+		s, ok := val.(string)
+		return ok && len(s) <= 128
+	case "cellOperatorId", "cellOperatorFailCount":
+		n, ok := val.(float64)
+		return ok && n >= 0 && n <= 100000
 		s, ok := val.(string)
 		return ok && len(s) <= 512
 	case "postDataToAirGradient", "disableCloudConnection", "offlineMode",
