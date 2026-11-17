@@ -205,11 +205,13 @@ func (h *MetricsHandler) HandleHistory(w http.ResponseWriter, r *http.Request) {
 const maxHistoryBuckets = 2500
 const maxExportRange = int64(366) * 86400 // one year of seconds
 
-// csvHeader is the exact 14-column raw schema order.
+// csvHeader is the exact 23-column raw schema order.
 var csvHeader = []string{
 	"timestamp", "pm01", "pm02", "pm10", "pm02_comp",
 	"rco2", "atmp", "atmp_comp", "rhum", "rhum_comp",
 	"tvoc_index", "tvoc_raw", "nox_index", "nox_raw",
+	"pm01_standard", "pm02_standard", "pm10_standard",
+	"pm003_count", "pm005_count", "pm01_count", "pm02_count", "pm50_count", "pm10_count",
 }
 
 // HandleExportCSV streams raw (interval=1) or bucket-averaged readings as
@@ -307,6 +309,9 @@ func writeExportRow(cw *csv.Writer, row store.ExportRow) error {
 		csvFloat(row.ATmp), csvFloat(row.ATmpComp), csvFloat(row.RHum), csvFloat(row.RHumComp),
 		strconv.FormatInt(row.TVOCIndex, 10), strconv.FormatInt(row.TVOCRaw, 10),
 		strconv.FormatInt(row.NOxIndex, 10), strconv.FormatInt(row.NOxRaw, 10),
+		csvNullable(row.PM01Std), csvNullable(row.PM02Std), csvNullable(row.PM10Std),
+		csvNullable(row.PM003Cnt), csvNullable(row.PM005Cnt), csvNullable(row.PM01Cnt),
+		csvNullable(row.PM02Cnt), csvNullable(row.PM50Cnt), csvNullable(row.PM10Cnt),
 	})
 }
 
@@ -326,6 +331,30 @@ func mergeExportRows(dst *store.ExportRow, src store.ExportRow) {
 	dst.TVOCRaw = avgInt64(dst.TVOCRaw, src.TVOCRaw)
 	dst.NOxIndex = avgInt64(dst.NOxIndex, src.NOxIndex)
 	dst.NOxRaw = avgInt64(dst.NOxRaw, src.NOxRaw)
+	mergeNullableFloat(&dst.PM01Std, src.PM01Std)
+	mergeNullableFloat(&dst.PM02Std, src.PM02Std)
+	mergeNullableFloat(&dst.PM10Std, src.PM10Std)
+	mergeNullableFloat(&dst.PM003Cnt, src.PM003Cnt)
+	mergeNullableFloat(&dst.PM005Cnt, src.PM005Cnt)
+	mergeNullableFloat(&dst.PM01Cnt, src.PM01Cnt)
+	mergeNullableFloat(&dst.PM02Cnt, src.PM02Cnt)
+	mergeNullableFloat(&dst.PM50Cnt, src.PM50Cnt)
+	mergeNullableFloat(&dst.PM10Cnt, src.PM10Cnt)
+}
+
+// mergeNullableFloat averages into dst when both sides carry a value and
+// keeps the valid side when the other partition predates the count columns
+// (so a legacy/migrated seam bucket reports the real value, not half of it).
+func mergeNullableFloat(dst **float64, src *float64) {
+	switch {
+	case *dst == nil:
+		*dst = src
+	case src == nil:
+		// keep dst
+	default:
+		v := (**dst + *src) / 2
+		*dst = &v
+	}
 }
 
 func avgInt64(a, b int64) int64 {
@@ -334,6 +363,15 @@ func avgInt64(a, b int64) int64 {
 
 func csvFloat(v float64) string {
 	return strconv.FormatFloat(v, 'f', -1, 64)
+}
+
+// csvNullable renders a NULL count column as an empty CSV cell — never "0",
+// which downstream consumers would read as a genuine zero reading.
+func csvNullable(v *float64) string {
+	if v == nil {
+		return ""
+	}
+	return csvFloat(*v)
 }
 
 func mathRound(val float64, precision int) float64 {

@@ -46,14 +46,21 @@ const upsertSQL = `
 	INSERT INTO readings (
 		timestamp, pm01, pm02, pm10, pm02_comp,
 		rco2, atmp, atmp_comp, rhum, rhum_comp,
-		tvoc_index, tvoc_raw, nox_index, nox_raw
-	) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+		tvoc_index, tvoc_raw, nox_index, nox_raw,
+		pm01_standard, pm02_standard, pm10_standard,
+		pm003_count, pm005_count, pm01_count, pm02_count, pm50_count, pm10_count
+	) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
 	ON CONFLICT(timestamp) DO UPDATE SET
 		pm01 = excluded.pm01, pm02 = excluded.pm02, pm10 = excluded.pm10, pm02_comp = excluded.pm02_comp,
 		rco2 = excluded.rco2, atmp = excluded.atmp, atmp_comp = excluded.atmp_comp,
 		rhum = excluded.rhum, rhum_comp = excluded.rhum_comp,
 		tvoc_index = excluded.tvoc_index, tvoc_raw = excluded.tvoc_raw,
-		nox_index = excluded.nox_index, nox_raw = excluded.nox_raw
+		nox_index = excluded.nox_index, nox_raw = excluded.nox_raw,
+		pm01_standard = excluded.pm01_standard, pm02_standard = excluded.pm02_standard,
+		pm10_standard = excluded.pm10_standard,
+		pm003_count = excluded.pm003_count, pm005_count = excluded.pm005_count,
+		pm01_count = excluded.pm01_count, pm02_count = excluded.pm02_count,
+		pm50_count = excluded.pm50_count, pm10_count = excluded.pm10_count
 `
 
 func dbDSN(path string) string {
@@ -211,12 +218,35 @@ func (sm *StorageManager) rotateDB(t time.Time) error {
 		timestamp INTEGER PRIMARY KEY,
 		pm01 REAL, pm02 REAL, pm10 REAL, pm02_comp REAL,
 		rco2 INTEGER, atmp REAL, atmp_comp REAL, rhum REAL, rhum_comp REAL,
-		tvoc_index INTEGER, tvoc_raw INTEGER, nox_index INTEGER, nox_raw INTEGER
+		tvoc_index INTEGER, tvoc_raw INTEGER, nox_index INTEGER, nox_raw INTEGER,
+		pm01_standard REAL, pm02_standard REAL, pm10_standard REAL,
+		pm003_count REAL, pm005_count REAL, pm01_count REAL,
+		pm02_count REAL, pm50_count REAL, pm10_count REAL
 	);`
 	// idx_readings_timestamp removed: redundant with the INTEGER PRIMARY KEY rowid.
 	if _, err := db.Exec(schema); err != nil {
 		_ = db.Close()
 		return err
+	}
+
+	// Migrate pre-existing partitions created before the particle-count
+	// archive extension: ALTER each new column in; older rows keep NULL.
+	// Skip when already migrated (avoids nine guaranteed-duplicate ALTERs on
+	// every re-mount); "duplicate column name" errors mean the partition was
+	// migrated concurrently or mid-loop by an earlier run — tolerated, since
+	// a partially migrated table safely degrades to the legacy export path.
+	if !partitionHasCountColumns(db) {
+		for _, col := range []string{
+			"pm01_standard", "pm02_standard", "pm10_standard",
+			"pm003_count", "pm005_count", "pm01_count", "pm02_count", "pm50_count", "pm10_count",
+		} {
+			if _, err := db.Exec("ALTER TABLE readings ADD COLUMN " + col + " REAL"); err != nil {
+				if !strings.Contains(err.Error(), "duplicate column name") {
+					_ = db.Close()
+					return err
+				}
+			}
+		}
 	}
 
 	if sm.activeDB != nil {
@@ -626,6 +656,8 @@ func (sm *StorageManager) insertGroup(ctx context.Context, recs []collector.Sens
 			r.Timestamp, r.PM01, r.PM02, r.PM10, r.PM02Comp,
 			r.RCO2, r.ATmp, r.ATmpComp, r.RHum, r.RHumComp,
 			r.TVOCIndex, r.TVOCRaw, r.NOxIndex, r.NOxRaw,
+			r.PM01Std, r.PM02Std, r.PM10Std,
+			r.PM003Cnt, r.PM005Cnt, r.PM01Cnt, r.PM02Cnt, r.PM50Cnt, r.PM10Cnt,
 		); err != nil {
 			return 0, partitionMax, err
 		}

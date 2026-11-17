@@ -252,6 +252,16 @@ func sanitizeFloat(v, fallback, minVal, maxVal float64) float64 {
 	return v
 }
 
+// sanitizeOptional returns nil when the firmware did not report the field
+// (nil JSON pointer) so it archives as NULL rather than a fabricated zero.
+func sanitizeOptional(v *float64, fallback, minVal, maxVal float64) *float64 {
+	if v == nil {
+		return nil
+	}
+	s := sanitizeFloat(*v, fallback, minVal, maxVal)
+	return &s
+}
+
 func clampInt(v, minVal, maxVal int) int {
 	if v < minVal {
 		return minVal
@@ -357,6 +367,15 @@ func (c *Collector) poll(ctx context.Context) (bool, string) {
 		TVOCRaw:   roundInt(raw.TVOCRaw),
 		NOxIndex:  noxIdx,
 		NOxRaw:    roundInt(raw.NOxRaw),
+		PM01Std:   sanitizeOptional(raw.PM01Standard, 0, 0, 5000),
+		PM02Std:   sanitizeOptional(raw.PM02Standard, 0, 0, 5000),
+		PM10Std:   sanitizeOptional(raw.PM10Standard, 0, 0, 5000),
+		PM003Cnt:  sanitizeOptional(raw.PM003Count, 0, 0, 100000),
+		PM005Cnt:  sanitizeOptional(raw.PM005Count, 0, 0, 100000),
+		PM01Cnt:   sanitizeOptional(raw.PM01Count, 0, 0, 100000),
+		PM02Cnt:   sanitizeOptional(raw.PM02Count, 0, 0, 100000),
+		PM50Cnt:   sanitizeOptional(raw.PM50Count, 0, 0, 100000),
+		PM10Cnt:   sanitizeOptional(raw.PM10Count, 0, 0, 100000),
 	}
 
 	// Sane-epoch guard: refuse to queue/archive samples stamped by an unsynced

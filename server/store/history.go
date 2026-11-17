@@ -26,14 +26,25 @@ type HistoricalPoint struct {
 	NOxIndex  int     `json:"nox_index"`
 }
 
-// ExportRow carries one raw (or bucket-averaged) sample with all 14 stored
-// columns for the CSV export stream.
+// ExportRow carries one raw (or bucket-averaged) sample with all 23 stored
+// columns for the CSV export stream. The particle-count/standard-PM fields
+// are nullable: NULL means the row predates the archive extension (or the
+// firmware does not report it) and is rendered as an empty CSV cell, never 0.
 type ExportRow struct {
 	Timestamp int64
 	PM01      float64
 	PM02      float64
 	PM10      float64
 	PM02Comp  float64
+	PM01Std   *float64
+	PM02Std   *float64
+	PM10Std   *float64
+	PM003Cnt  *float64
+	PM005Cnt  *float64
+	PM01Cnt   *float64
+	PM02Cnt   *float64
+	PM50Cnt   *float64
+	PM10Cnt   *float64
 	RCO2      int64
 	ATmp      float64
 	ATmpComp  float64
@@ -100,6 +111,19 @@ const historyBucketQuery = `
 
 const exportRawQuery = `
 	SELECT timestamp, pm01, pm02, pm10, pm02_comp, rco2, atmp, atmp_comp,
+	       rhum, rhum_comp, tvoc_index, tvoc_raw, nox_index, nox_raw,
+	       pm01_standard, pm02_standard, pm10_standard,
+	       pm003_count, pm005_count, pm01_count, pm02_count, pm50_count, pm10_count
+	FROM readings
+	WHERE timestamp >= ? AND timestamp <= ?
+	ORDER BY timestamp ASC;
+`
+
+// Legacy variants for partitions created before the particle-count archive
+// extension (they are never re-mounted for writing, so ALTER migrations
+// cannot reach them after monthly rotation).
+const exportRawQueryLegacy = `
+	SELECT timestamp, pm01, pm02, pm10, pm02_comp, rco2, atmp, atmp_comp,
 	       rhum, rhum_comp, tvoc_index, tvoc_raw, nox_index, nox_raw
 	FROM readings
 	WHERE timestamp >= ? AND timestamp <= ?
@@ -113,12 +137,45 @@ const exportBucketQuery = `
 		CAST(ROUND(AVG(rco2)) AS INTEGER),
 		ROUND(AVG(atmp), 2), ROUND(AVG(atmp_comp), 2), ROUND(AVG(rhum), 2), ROUND(AVG(rhum_comp), 2),
 		CAST(ROUND(AVG(tvoc_index)) AS INTEGER), CAST(ROUND(AVG(tvoc_raw)) AS INTEGER),
+		CAST(ROUND(AVG(nox_index)) AS INTEGER), CAST(ROUND(AVG(nox_raw)) AS INTEGER),
+		ROUND(AVG(pm01_standard), 2), ROUND(AVG(pm02_standard), 2), ROUND(AVG(pm10_standard), 2),
+		ROUND(AVG(pm003_count), 2), ROUND(AVG(pm005_count), 2), ROUND(AVG(pm01_count), 2),
+		ROUND(AVG(pm02_count), 2), ROUND(AVG(pm50_count), 2), ROUND(AVG(pm10_count), 2)
+	FROM readings
+	WHERE timestamp >= ? AND timestamp <= ?
+	GROUP BY bucket
+	ORDER BY bucket ASC;
+`
+
+const exportBucketQueryLegacy = `
+	SELECT
+		(timestamp / ?) * ? AS bucket,
+		ROUND(AVG(pm01), 2), ROUND(AVG(pm02), 2), ROUND(AVG(pm10), 2), ROUND(AVG(pm02_comp), 2),
+		CAST(ROUND(AVG(rco2)) AS INTEGER),
+		ROUND(AVG(atmp), 2), ROUND(AVG(atmp_comp), 2), ROUND(AVG(rhum), 2), ROUND(AVG(rhum_comp), 2),
+		CAST(ROUND(AVG(tvoc_index)) AS INTEGER), CAST(ROUND(AVG(tvoc_raw)) AS INTEGER),
 		CAST(ROUND(AVG(nox_index)) AS INTEGER), CAST(ROUND(AVG(nox_raw)) AS INTEGER)
 	FROM readings
 	WHERE timestamp >= ? AND timestamp <= ?
 	GROUP BY bucket
 	ORDER BY bucket ASC;
 `
+
+// partitionHasCountColumns reports whether a partition's readings table
+// already carries all nine particle-count/standard columns. A failed probe
+// is logged and treated as legacy so the export degrades gracefully rather
+// than erroring; the log keeps intentional-legacy and probe-failure apart.
+func partitionHasCountColumns(db *sql.DB) bool {
+	var n int
+	err := db.QueryRow(`SELECT COUNT(*) FROM pragma_table_info('readings') WHERE name IN
+		('pm01_standard','pm02_standard','pm10_standard',
+		 'pm003_count','pm005_count','pm01_count','pm02_count','pm50_count','pm10_count')`).Scan(&n)
+	if err != nil {
+		logger.Warn("Store", "Count-column probe failed on partition: %v", err)
+		return false
+	}
+	return n == 9
+}
 
 // QueryHistoricalBuckets aggregates readings into interval-sized buckets.
 // Partitions are discovered from the directory, opened read-only, and queried
@@ -231,11 +288,19 @@ func StreamHistoricalRows(ctx context.Context, baseDir string, start, end int64,
 			continue
 		}
 
+		hasCounts := partitionHasCountColumns(db)
+
 		var rows *sql.Rows
 		if interval == 1 {
-			rows, err = db.QueryContext(ctx, exportRawQuery, start, end)
-		} else {
+			if hasCounts {
+				rows, err = db.QueryContext(ctx, exportRawQuery, start, end)
+			} else {
+				rows, err = db.QueryContext(ctx, exportRawQueryLegacy, start, end)
+			}
+		} else if hasCounts {
 			rows, err = db.QueryContext(ctx, exportBucketQuery, interval, interval, start, end)
+		} else {
+			rows, err = db.QueryContext(ctx, exportBucketQueryLegacy, interval, interval, start, end)
 		}
 		if err != nil {
 			logger.Warn("Store", "Export query failed on %s: %v", filepath.Base(dbPath), err)
@@ -247,9 +312,22 @@ func StreamHistoricalRows(ctx context.Context, baseDir string, start, end int64,
 		var emitErr error
 		for rows.Next() {
 			var row ExportRow
-			if err := rows.Scan(&row.Timestamp, &row.PM01, &row.PM02, &row.PM10, &row.PM02Comp,
-				&row.RCO2, &row.ATmp, &row.ATmpComp, &row.RHum, &row.RHumComp,
-				&row.TVOCIndex, &row.TVOCRaw, &row.NOxIndex, &row.NOxRaw); err != nil {
+			var err error
+			if hasCounts {
+				// NULL count columns scan into nil pointers (rendered as
+				// empty CSV cells), so pre-upgrade rows in a migrated
+				// partition export instead of being dropped.
+				err = rows.Scan(&row.Timestamp, &row.PM01, &row.PM02, &row.PM10, &row.PM02Comp,
+					&row.RCO2, &row.ATmp, &row.ATmpComp, &row.RHum, &row.RHumComp,
+					&row.TVOCIndex, &row.TVOCRaw, &row.NOxIndex, &row.NOxRaw,
+					&row.PM01Std, &row.PM02Std, &row.PM10Std,
+					&row.PM003Cnt, &row.PM005Cnt, &row.PM01Cnt, &row.PM02Cnt, &row.PM50Cnt, &row.PM10Cnt)
+			} else {
+				err = rows.Scan(&row.Timestamp, &row.PM01, &row.PM02, &row.PM10, &row.PM02Comp,
+					&row.RCO2, &row.ATmp, &row.ATmpComp, &row.RHum, &row.RHumComp,
+					&row.TVOCIndex, &row.TVOCRaw, &row.NOxIndex, &row.NOxRaw)
+			}
+			if err != nil {
 				logger.Warn("Store", "Export row scan error on %s: %v", filepath.Base(dbPath), err)
 				continue
 			}
