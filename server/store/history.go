@@ -24,6 +24,8 @@ type HistoricalPoint struct {
 	RHumComp  float64 `json:"rhum_comp"`
 	TVOCIndex int     `json:"tvoc_index"`
 	NOxIndex  int     `json:"nox_index"`
+	TVOCRaw   float64 `json:"tvoc_raw"`
+	NOxRaw    float64 `json:"nox_raw"`
 }
 
 // ExportRow carries one raw (or bucket-averaged) sample with all 23 stored
@@ -51,9 +53,9 @@ type ExportRow struct {
 	RHum      float64
 	RHumComp  float64
 	TVOCIndex int64
-	TVOCRaw   int64
+	TVOCRaw   float64
 	NOxIndex  int64
-	NOxRaw    int64
+	NOxRaw    float64
 }
 
 // ResolveMonthlyPartitions discovers existing pigradient_*.db partitions on
@@ -102,7 +104,9 @@ const historyBucketQuery = `
 		ROUND(AVG(atmp_comp), 1),
 		ROUND(AVG(rhum_comp), 1),
 		CAST(ROUND(AVG(tvoc_index)) AS INTEGER),
-		CAST(ROUND(AVG(nox_index)) AS INTEGER)
+		CAST(ROUND(AVG(nox_index)) AS INTEGER),
+		ROUND(AVG(tvoc_raw), 1),
+		ROUND(AVG(nox_raw), 1)
 	FROM readings
 	WHERE timestamp >= ? AND timestamp <= ?
 	GROUP BY bucket
@@ -136,8 +140,8 @@ const exportBucketQuery = `
 		ROUND(AVG(pm01), 2), ROUND(AVG(pm02), 2), ROUND(AVG(pm10), 2), ROUND(AVG(pm02_comp), 2),
 		CAST(ROUND(AVG(rco2)) AS INTEGER),
 		ROUND(AVG(atmp), 2), ROUND(AVG(atmp_comp), 2), ROUND(AVG(rhum), 2), ROUND(AVG(rhum_comp), 2),
-		CAST(ROUND(AVG(tvoc_index)) AS INTEGER), CAST(ROUND(AVG(tvoc_raw)) AS INTEGER),
-		CAST(ROUND(AVG(nox_index)) AS INTEGER), CAST(ROUND(AVG(nox_raw)) AS INTEGER),
+		CAST(ROUND(AVG(tvoc_index)) AS INTEGER), ROUND(AVG(tvoc_raw), 2),
+		CAST(ROUND(AVG(nox_index)) AS INTEGER), ROUND(AVG(nox_raw), 2),
 		ROUND(AVG(pm01_standard), 2), ROUND(AVG(pm02_standard), 2), ROUND(AVG(pm10_standard), 2),
 		ROUND(AVG(pm003_count), 2), ROUND(AVG(pm005_count), 2), ROUND(AVG(pm01_count), 2),
 		ROUND(AVG(pm02_count), 2), ROUND(AVG(pm50_count), 2), ROUND(AVG(pm10_count), 2)
@@ -153,8 +157,8 @@ const exportBucketQueryLegacy = `
 		ROUND(AVG(pm01), 2), ROUND(AVG(pm02), 2), ROUND(AVG(pm10), 2), ROUND(AVG(pm02_comp), 2),
 		CAST(ROUND(AVG(rco2)) AS INTEGER),
 		ROUND(AVG(atmp), 2), ROUND(AVG(atmp_comp), 2), ROUND(AVG(rhum), 2), ROUND(AVG(rhum_comp), 2),
-		CAST(ROUND(AVG(tvoc_index)) AS INTEGER), CAST(ROUND(AVG(tvoc_raw)) AS INTEGER),
-		CAST(ROUND(AVG(nox_index)) AS INTEGER), CAST(ROUND(AVG(nox_raw)) AS INTEGER)
+		CAST(ROUND(AVG(tvoc_index)) AS INTEGER), ROUND(AVG(tvoc_raw), 2),
+		CAST(ROUND(AVG(nox_index)) AS INTEGER), ROUND(AVG(nox_raw), 2)
 	FROM readings
 	WHERE timestamp >= ? AND timestamp <= ?
 	GROUP BY bucket
@@ -214,7 +218,7 @@ func QueryHistoricalBuckets(ctx context.Context, baseDir string, start, end int6
 
 		for rows.Next() {
 			var p HistoricalPoint
-			if err := rows.Scan(&p.Timestamp, &p.PM01, &p.PM02Comp, &p.PM10, &p.RCO2, &p.ATmpComp, &p.RHumComp, &p.TVOCIndex, &p.NOxIndex); err == nil {
+			if err := rows.Scan(&p.Timestamp, &p.PM01, &p.PM02Comp, &p.PM10, &p.RCO2, &p.ATmpComp, &p.RHumComp, &p.TVOCIndex, &p.NOxIndex, &p.TVOCRaw, &p.NOxRaw); err == nil {
 				combined = append(combined, p)
 			}
 		}

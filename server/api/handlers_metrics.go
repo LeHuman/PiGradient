@@ -307,8 +307,8 @@ func writeExportRow(cw *csv.Writer, row store.ExportRow) error {
 		csvFloat(row.PM01), csvFloat(row.PM02), csvFloat(row.PM10), csvFloat(row.PM02Comp),
 		strconv.FormatInt(row.RCO2, 10),
 		csvFloat(row.ATmp), csvFloat(row.ATmpComp), csvFloat(row.RHum), csvFloat(row.RHumComp),
-		strconv.FormatInt(row.TVOCIndex, 10), strconv.FormatInt(row.TVOCRaw, 10),
-		strconv.FormatInt(row.NOxIndex, 10), strconv.FormatInt(row.NOxRaw, 10),
+		strconv.FormatInt(row.TVOCIndex, 10), csvFloat(row.TVOCRaw),
+		strconv.FormatInt(row.NOxIndex, 10), csvFloat(row.NOxRaw),
 		csvNullable(row.PM01Std), csvNullable(row.PM02Std), csvNullable(row.PM10Std),
 		csvNullable(row.PM003Cnt), csvNullable(row.PM005Cnt), csvNullable(row.PM01Cnt),
 		csvNullable(row.PM02Cnt), csvNullable(row.PM50Cnt), csvNullable(row.PM10Cnt),
@@ -328,9 +328,9 @@ func mergeExportRows(dst *store.ExportRow, src store.ExportRow) {
 	dst.RHumComp = (dst.RHumComp + src.RHumComp) / 2
 	dst.RCO2 = avgInt64(dst.RCO2, src.RCO2)
 	dst.TVOCIndex = avgInt64(dst.TVOCIndex, src.TVOCIndex)
-	dst.TVOCRaw = avgInt64(dst.TVOCRaw, src.TVOCRaw)
+	dst.TVOCRaw = (dst.TVOCRaw + src.TVOCRaw) / 2
 	dst.NOxIndex = avgInt64(dst.NOxIndex, src.NOxIndex)
-	dst.NOxRaw = avgInt64(dst.NOxRaw, src.NOxRaw)
+	dst.NOxRaw = (dst.NOxRaw + src.NOxRaw) / 2
 	mergeNullableFloat(&dst.PM01Std, src.PM01Std)
 	mergeNullableFloat(&dst.PM02Std, src.PM02Std)
 	mergeNullableFloat(&dst.PM10Std, src.PM10Std)

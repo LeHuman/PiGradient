@@ -60,8 +60,10 @@ type SensorRecord struct {
 	ATmpComp  float64 `json:"atmp_comp"`
 	RHum      float64 `json:"rhum"`
 	RHumComp  float64 `json:"rhum_comp"`
-	TVOCIndex int     `json:"tvoc_index"`
-	TVOCRaw   int     `json:"tvoc_raw"`
-	NOxIndex  int     `json:"nox_index"`
-	NOxRaw    int     `json:"nox_raw"`
+	TVOCIndex int `json:"tvoc_index"`
+	// Raw SGP41 tick averages keep full device precision (2 dp); the SQLite
+	// columns have INTEGER affinity but hold REAL whenever not lossless-int.
+	TVOCRaw  float64 `json:"tvoc_raw"`
+	NOxIndex int     `json:"nox_index"`
+	NOxRaw   float64 `json:"nox_raw"`
 }
