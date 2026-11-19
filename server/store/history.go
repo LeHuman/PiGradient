@@ -26,6 +26,9 @@ type HistoricalPoint struct {
 	NOxIndex  int     `json:"nox_index"`
 	TVOCRaw   float64 `json:"tvoc_raw"`
 	NOxRaw    float64 `json:"nox_raw"`
+	// Nullable: nil for partitions created before the count archive
+	// extension (or rows the firmware reported without counts).
+	PM003Cnt *float64 `json:"pm003_count"`
 }
 
 // ExportRow carries one raw (or bucket-averaged) sample with all 23 stored
@@ -95,6 +98,28 @@ func ResolveMonthlyPartitions(baseDir string, start, end time.Time) []string {
 }
 
 const historyBucketQuery = `
+	SELECT
+		(timestamp / ?) * ? AS bucket,
+		ROUND(AVG(pm01), 1),
+		ROUND(AVG(pm02_comp), 1),
+		ROUND(AVG(pm10), 1),
+		CAST(ROUND(AVG(rco2)) AS INTEGER),
+		ROUND(AVG(atmp_comp), 1),
+		ROUND(AVG(rhum_comp), 1),
+		CAST(ROUND(AVG(tvoc_index)) AS INTEGER),
+		CAST(ROUND(AVG(nox_index)) AS INTEGER),
+		ROUND(AVG(tvoc_raw), 1),
+		ROUND(AVG(nox_raw), 1),
+		ROUND(AVG(pm003_count), 2)
+	FROM readings
+	WHERE timestamp >= ? AND timestamp <= ?
+	GROUP BY bucket
+	ORDER BY bucket ASC;
+`
+
+// Legacy variant for partitions created before the count archive extension
+// (they lack the particle-count columns).
+const historyBucketQueryLegacy = `
 	SELECT
 		(timestamp / ?) * ? AS bucket,
 		ROUND(AVG(pm01), 1),
@@ -209,7 +234,14 @@ func QueryHistoricalBuckets(ctx context.Context, baseDir string, start, end int6
 			continue
 		}
 
-		rows, err := db.QueryContext(ctx, historyBucketQuery, interval, interval, start, end)
+		hasCounts := partitionHasCountColumns(db)
+
+		var rows *sql.Rows
+		if hasCounts {
+			rows, err = db.QueryContext(ctx, historyBucketQuery, interval, interval, start, end)
+		} else {
+			rows, err = db.QueryContext(ctx, historyBucketQueryLegacy, interval, interval, start, end)
+		}
 		if err != nil {
 			logger.Warn("Store", "Historical query failed on %s: %v", filepath.Base(dbPath), err)
 			_ = db.Close()
@@ -218,7 +250,13 @@ func QueryHistoricalBuckets(ctx context.Context, baseDir string, start, end int6
 
 		for rows.Next() {
 			var p HistoricalPoint
-			if err := rows.Scan(&p.Timestamp, &p.PM01, &p.PM02Comp, &p.PM10, &p.RCO2, &p.ATmpComp, &p.RHumComp, &p.TVOCIndex, &p.NOxIndex, &p.TVOCRaw, &p.NOxRaw); err == nil {
+			var scanErr error
+			if hasCounts {
+				scanErr = rows.Scan(&p.Timestamp, &p.PM01, &p.PM02Comp, &p.PM10, &p.RCO2, &p.ATmpComp, &p.RHumComp, &p.TVOCIndex, &p.NOxIndex, &p.TVOCRaw, &p.NOxRaw, &p.PM003Cnt)
+			} else {
+				scanErr = rows.Scan(&p.Timestamp, &p.PM01, &p.PM02Comp, &p.PM10, &p.RCO2, &p.ATmpComp, &p.RHumComp, &p.TVOCIndex, &p.NOxIndex, &p.TVOCRaw, &p.NOxRaw)
+			}
+			if scanErr == nil {
 				combined = append(combined, p)
 			}
 		}
@@ -254,6 +292,16 @@ func mergeDuplicateBuckets(points []HistoricalPoint) []HistoricalPoint {
 			last.PM10 = (last.PM10 + p.PM10) / 2
 			last.ATmpComp = (last.ATmpComp + p.ATmpComp) / 2
 			last.RHumComp = (last.RHumComp + p.RHumComp) / 2
+			last.TVOCRaw = (last.TVOCRaw + p.TVOCRaw) / 2
+			last.NOxRaw = (last.NOxRaw + p.NOxRaw) / 2
+			// Keep the valid side for nullable counts (legacy seam partition).
+			switch {
+			case last.PM003Cnt == nil:
+				last.PM003Cnt = p.PM003Cnt
+			case p.PM003Cnt != nil:
+				v := (*last.PM003Cnt + *p.PM003Cnt) / 2
+				last.PM003Cnt = &v
+			}
 			last.RCO2 = int(math.Round(float64(last.RCO2+p.RCO2) / 2))
 			last.TVOCIndex = int(math.Round(float64(last.TVOCIndex+p.TVOCIndex) / 2))
 			last.NOxIndex = int(math.Round(float64(last.NOxIndex+p.NOxIndex) / 2))

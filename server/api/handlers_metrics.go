@@ -80,7 +80,9 @@ func (h *MetricsHandler) GetLivePayload() map[string]any {
 			"tvoc_raw":   record.TVOCRaw,
 			"nox_index":  record.NOxIndex,
 			"nox_raw":    record.NOxRaw,
-			"boot_count": devInfo.BootCount,
+			// Nullable: nil when firmware does not report PM0.3 counts.
+			"pm003_count": record.PM003Cnt,
+			"boot_count":  devInfo.BootCount,
 		},
 		"processed": map[string]any{
 			"aqi_pm25":     aqi.AQI,
