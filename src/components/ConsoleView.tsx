@@ -39,6 +39,7 @@ import {
   calculateDewPointC,
   calculateHeatIndexC,
   calculatePm25Aqi,
+  calculateTvocPpb,
   computeRollingAverage,
   computeSeriesStats,
   cToF,
@@ -85,6 +86,12 @@ interface AxisSelection {
   showDewPoint: boolean;
   showHeatIndex: boolean;
   showAbsHumidity: boolean;
+  // Analytics master gate & technical diagnostic series
+  showAnalytics: boolean;
+  showPm003: boolean;
+  showTvocPpb: boolean;
+  showTvocTicks: boolean;
+  showNoxTicks: boolean;
 }
 
 interface AnalyticsToolsConfig {
@@ -107,6 +114,11 @@ const DEFAULT_AXES: AxisSelection = {
   showDewPoint: false,
   showHeatIndex: false,
   showAbsHumidity: false,
+  showAnalytics: false,
+  showPm003: false,
+  showTvocPpb: false,
+  showTvocTicks: false,
+  showNoxTicks: false,
 };
 
 const DEFAULT_ANALYTICS_TOOLS: AnalyticsToolsConfig = {
@@ -298,6 +310,10 @@ export const ConsoleView: React.FC<ConsoleViewProps> = ({
     sumRhum: number;
     sumTvoc: number;
     sumNox: number;
+    sumTvocRaw: number;
+    sumNoxRaw: number;
+    sumPm003: number;
+    countPm003: number;
   } | null>(null);
   const lastNon5mFlushRef = useRef<number>(0);
 
@@ -334,6 +350,10 @@ export const ConsoleView: React.FC<ConsoleViewProps> = ({
               sumRhum: tail.rhum_comp * weight,
               sumTvoc: tail.tvoc_index * weight,
               sumNox: tail.nox_index * weight,
+              sumTvocRaw: (tail.tvoc_raw ?? 0) * weight,
+              sumNoxRaw: (tail.nox_raw ?? 0) * weight,
+              sumPm003: tail.pm003_count != null ? tail.pm003_count * weight : 0,
+              countPm003: tail.pm003_count != null ? weight : 0,
             };
           } else {
             liveBucketRef.current = null;
@@ -427,6 +447,9 @@ export const ConsoleView: React.FC<ConsoleViewProps> = ({
           rhum_comp: telemetry.raw.rhum_comp,
           tvoc_index: telemetry.raw.tvoc_index,
           nox_index: telemetry.raw.nox_index,
+          tvoc_raw: telemetry.raw.tvoc_raw,
+          nox_raw: telemetry.raw.nox_raw,
+          pm003_count: telemetry.raw.pm003_count ?? undefined,
         };
         const next = [...prev, newPoint];
         if (next.length > 300) next.shift();
@@ -439,6 +462,8 @@ export const ConsoleView: React.FC<ConsoleViewProps> = ({
     const windowSec = RANGE_WINDOW_SEC[rangePreset];
     const cadenceSec = LIVE_CADENCE_SEC[rangePreset];
     const bucketTs = Math.floor(telemetry.timestamp / intervalSec) * intervalSec;
+    const hasPm003 =
+      telemetry.raw.pm003_count != null && Number.isFinite(telemetry.raw.pm003_count);
 
     const acc = liveBucketRef.current;
     if (!acc || acc.preset !== rangePreset || acc.bucketTs !== bucketTs) {
@@ -454,6 +479,10 @@ export const ConsoleView: React.FC<ConsoleViewProps> = ({
         sumRhum: telemetry.raw.rhum_comp,
         sumTvoc: telemetry.raw.tvoc_index,
         sumNox: telemetry.raw.nox_index,
+        sumTvocRaw: telemetry.raw.tvoc_raw,
+        sumNoxRaw: telemetry.raw.nox_raw,
+        sumPm003: hasPm003 ? telemetry.raw.pm003_count! : 0,
+        countPm003: hasPm003 ? 1 : 0,
       };
     } else {
       acc.count += 1;
@@ -465,6 +494,12 @@ export const ConsoleView: React.FC<ConsoleViewProps> = ({
       acc.sumRhum += telemetry.raw.rhum_comp;
       acc.sumTvoc += telemetry.raw.tvoc_index;
       acc.sumNox += telemetry.raw.nox_index;
+      acc.sumTvocRaw += telemetry.raw.tvoc_raw;
+      acc.sumNoxRaw += telemetry.raw.nox_raw;
+      if (hasPm003) {
+        acc.sumPm003 += telemetry.raw.pm003_count!;
+        acc.countPm003 += 1;
+      }
     }
 
     const cur = liveBucketRef.current!;
@@ -478,6 +513,12 @@ export const ConsoleView: React.FC<ConsoleViewProps> = ({
       rhum_comp: Math.round((cur.sumRhum / cur.count) * 10) / 10,
       tvoc_index: Math.round(cur.sumTvoc / cur.count),
       nox_index: Math.round(cur.sumNox / cur.count),
+      tvoc_raw: Math.round((cur.sumTvocRaw / cur.count) * 10) / 10,
+      nox_raw: Math.round((cur.sumNoxRaw / cur.count) * 10) / 10,
+      pm003_count:
+        cur.countPm003 > 0
+          ? Math.round((cur.sumPm003 / cur.countPm003) * 100) / 100
+          : null,
     };
 
     const nowSec = Math.floor(Date.now() / 1000);
@@ -493,6 +534,7 @@ export const ConsoleView: React.FC<ConsoleViewProps> = ({
 
       if (bucketTs === last.timestamp) {
         if (nowSec - lastNon5mFlushRef.current < cadenceSec) return prev;
+        // Raw SGP41 ticks jitter every second; omit from perceptible gate to avoid chart churn
         const perceptible =
           Math.abs((nextPoint.pm01 ?? 0) - (last.pm01 ?? 0)) >= 0.2 ||
           Math.abs(nextPoint.pm02_comp - last.pm02_comp) >= 0.2 ||
@@ -549,18 +591,23 @@ export const ConsoleView: React.FC<ConsoleViewProps> = ({
       label: string;
       shortLabel: string;
       unit: string;
+      tooltipUnit?: string;
       color: string;
       darkColor: string;
       colorClass: string;
       yAxisID: string;
-      values: number[];
+      values: (number | null)[];
       fillColor?: string;
       borderWidth?: number;
       borderDash?: number[];
       cbDash?: number[];
       cbPointStyle?: string;
     }) => {
-      const canComputeMa = maWin > 1 && opts.values.length > 2;
+      const validCount = opts.values.reduce<number>(
+        (count, v) => (v !== null && Number.isFinite(v) ? count + 1 : count),
+        0
+      );
+      const canComputeMa = maWin > 1 && validCount > 2;
       const maValues = canComputeMa ? computeRollingAverage(opts.values, maWin) : opts.values;
       const pointStyle = prefs.colorblindSafe ? (opts.cbPointStyle || 'circle') : 'circle';
       const activeDash = prefs.colorblindSafe ? opts.cbDash : opts.borderDash;
@@ -569,12 +616,14 @@ export const ConsoleView: React.FC<ConsoleViewProps> = ({
         datasets.push({
           label: `${opts.shortLabel} (${maDurLabel} Avg)`,
           shortCanvasLabel: `${opts.shortLabel} Avg`,
+          tooltipUnit: opts.tooltipUnit,
           data: maValues,
           borderColor: opts.color,
           backgroundColor: opts.fillColor || 'transparent',
           fill: Boolean(opts.fillColor),
           yAxisID: opts.yAxisID,
           tension: 0.3,
+          spanGaps: false,
           pointRadius: prefs.colorblindSafe ? 2 : 0,
           pointHoverRadius: 4,
           pointStyle,
@@ -585,12 +634,14 @@ export const ConsoleView: React.FC<ConsoleViewProps> = ({
       } else {
         datasets.push({
           label: opts.label,
+          tooltipUnit: opts.tooltipUnit,
           data: opts.values,
           borderColor: opts.color,
           backgroundColor: opts.fillColor || 'transparent',
           fill: Boolean(opts.fillColor),
           yAxisID: opts.yAxisID,
           tension: 0.2,
+          spanGaps: false,
           pointRadius: basePtRadius,
           pointHoverRadius: 4,
           pointStyle,
@@ -602,11 +653,13 @@ export const ConsoleView: React.FC<ConsoleViewProps> = ({
           datasets.push({
             label: `${opts.shortLabel} (${maDurLabel} Avg)`,
             shortCanvasLabel: `${opts.shortLabel} Avg`,
+            tooltipUnit: opts.tooltipUnit,
             data: maValues,
             borderColor: opts.darkColor,
             fill: false,
             yAxisID: opts.yAxisID,
             tension: 0.3,
+            spanGaps: false,
             pointRadius: 0,
             pointStyle,
             borderWidth: 2,
@@ -836,6 +889,78 @@ export const ConsoleView: React.FC<ConsoleViewProps> = ({
       });
     }
 
+    // Analytics-gated technical & diagnostic series
+    if (axes.showAnalytics && axes.showPm003) {
+      addSeries({
+        id: 'pm003',
+        label: 'PM0.3 Count (#/0.1L)',
+        shortLabel: 'PM0.3',
+        unit: '#/0.1L',
+        color: '#FACC15',
+        darkColor: '#A16207',
+        colorClass: 'text-yellow-400',
+        yAxisID: 'yPm003',
+        values: activeData.map((d) => d.pm003_count ?? null),
+        cbDash: [4, 2],
+        cbPointStyle: 'circle',
+      });
+    }
+
+    if (axes.showAnalytics && axes.showTvocPpb) {
+      addSeries({
+        id: 'tvocPpb',
+        label: 'TVOC Est. (ppb)',
+        shortLabel: 'TVOC ppb',
+        unit: 'ppb',
+        color: '#E879F9',
+        darkColor: '#A21CAF',
+        colorClass: 'text-fuchsia-400',
+        yAxisID: 'yTvocPpb',
+        values: activeData.map((d) => calculateTvocPpb(d.tvoc_index)),
+        borderDash: [8, 3, 2, 3],
+        cbDash: [8, 3, 2, 3],
+        cbPointStyle: 'triangle',
+      });
+    }
+
+    if (axes.showAnalytics && axes.showTvocTicks) {
+      addSeries({
+        id: 'tvocTicks',
+        label: 'VOC Ticks',
+        shortLabel: 'VOC Ticks',
+        unit: 'ticks',
+        tooltipUnit: 'ticks',
+        color: '#C084FC',
+        darkColor: '#7E22CE',
+        colorClass: 'text-purple-300',
+        yAxisID: 'yTicks',
+        values: activeData.map((d) => d.tvoc_raw ?? null),
+        borderWidth: 1.6,
+        borderDash: [4, 4],
+        cbDash: [4, 4],
+        cbPointStyle: 'rectRounded',
+      });
+    }
+
+    if (axes.showAnalytics && axes.showNoxTicks) {
+      addSeries({
+        id: 'noxTicks',
+        label: 'NOx Ticks',
+        shortLabel: 'NOx Ticks',
+        unit: 'ticks',
+        tooltipUnit: 'ticks',
+        color: '#F9A8D4',
+        darkColor: '#9D174D',
+        colorClass: 'text-pink-300',
+        yAxisID: 'yTicks',
+        values: activeData.map((d) => d.nox_raw ?? null),
+        borderWidth: 1.6,
+        borderDash: [2, 3],
+        cbDash: [2, 3],
+        cbPointStyle: 'cross',
+      });
+    }
+
     return { chartData: { labels, datasets }, summaryRows: summaries };
   }, [activeData, rangePreset, axes, tempUnit, analyticsTools, prefs.colorblindSafe]);
 
@@ -1060,7 +1185,8 @@ export const ConsoleView: React.FC<ConsoleViewProps> = ({
             continue;
           }
           const rawVal = ds.data[ds.data.length - 1];
-          const formattedVal = typeof rawVal === 'number' ? rawVal : '';
+          if (typeof rawVal !== 'number' || !Number.isFinite(rawVal)) continue;
+          const formattedVal = rawVal.toLocaleString(undefined, { maximumFractionDigits: 1 });
           tags.push({
             targetY: py,
             text: `${ds.shortCanvasLabel || ds.label}: ${formattedVal}`,
@@ -1340,6 +1466,19 @@ export const ConsoleView: React.FC<ConsoleViewProps> = ({
         padding: 10,
         bodyFont: { family: 'Consolas, Menlo, monospace', size: 11 },
         titleFont: { family: 'Segoe UI, Roboto, Helvetica, Arial, sans-serif', size: 11, weight: 'bold' },
+        callbacks: {
+          label: (ctx) => {
+            const ds = ctx.dataset as any;
+            const rawLabel = ds.label || '';
+            const val = ctx.parsed.y;
+            if (val === null || val === undefined || !Number.isFinite(val)) {
+              return `${rawLabel}: --`;
+            }
+            const formatted = val.toLocaleString(undefined, { maximumFractionDigits: 2 });
+            const unitSuffix = ds.tooltipUnit ? ` ${ds.tooltipUnit}` : '';
+            return `${rawLabel}: ${formatted}${unitSuffix}`;
+          },
+        },
       },
     },
     scales: {
@@ -1415,6 +1554,76 @@ export const ConsoleView: React.FC<ConsoleViewProps> = ({
         position: 'right',
         grid: { drawOnChartArea: false },
         ticks: { color: '#14B8A6', font: { family: 'Consolas, Menlo, monospace', size: 10 } },
+      },
+      yPm003: {
+        type: 'linear',
+        display: axes.showAnalytics && axes.showPm003,
+        position: 'right',
+        title: {
+          display: true,
+          text: 'PM0.3 (#/0.1L)',
+          color: '#FACC15',
+          font: { size: 10 },
+        },
+        grid: { drawOnChartArea: false },
+        ticks: {
+          color: '#FACC15',
+          font: { family: 'Consolas, Menlo, monospace', size: 10 },
+          callback: (value) => {
+            const num = typeof value === 'number' ? value : Number(value);
+            return Number.isFinite(num) ? num.toLocaleString() : value;
+          },
+        },
+      },
+      yTvocPpb: {
+        type: 'linear',
+        display: axes.showAnalytics && axes.showTvocPpb,
+        position: 'left',
+        title: {
+          display: true,
+          text: 'TVOC Est. (ppb)',
+          color: '#E879F9',
+          font: { size: 10 },
+        },
+        grid: { drawOnChartArea: false },
+        ticks: {
+          color: '#E879F9',
+          font: { family: 'Consolas, Menlo, monospace', size: 10 },
+          callback: (value) => {
+            const num = typeof value === 'number' ? value : Number(value);
+            return Number.isFinite(num) ? num.toLocaleString() : value;
+          },
+        },
+      },
+      yTicks: {
+        type: 'linear',
+        display: axes.showAnalytics && (axes.showTvocTicks || axes.showNoxTicks),
+        position: 'right',
+        title: {
+          display: true,
+          text: 'ticks',
+          color:
+            axes.showTvocTicks && !axes.showNoxTicks
+              ? '#C084FC'
+              : axes.showNoxTicks && !axes.showTvocTicks
+              ? '#F9A8D4'
+              : '#CBD5E1',
+          font: { size: 10 },
+        },
+        grid: { drawOnChartArea: false },
+        ticks: {
+          color:
+            axes.showTvocTicks && !axes.showNoxTicks
+              ? '#C084FC'
+              : axes.showNoxTicks && !axes.showTvocTicks
+              ? '#F9A8D4'
+              : '#CBD5E1',
+          font: { family: 'Consolas, Menlo, monospace', size: 10 },
+          callback: (value) => {
+            const num = typeof value === 'number' ? value : Number(value);
+            return Number.isFinite(num) ? num.toLocaleString() : value;
+          },
+        },
       },
     },
   };
@@ -1829,7 +2038,7 @@ export const ConsoleView: React.FC<ConsoleViewProps> = ({
         <div className="space-y-3">
           <div className="flex flex-col lg:flex-row lg:items-center justify-between gap-2">
             <div className="min-w-0 flex-1">
-              <div className="grid grid-cols-3 sm:flex sm:flex-wrap xl:flex-nowrap items-center gap-x-1 sm:gap-x-1 xl:gap-x-1.5 gap-y-0.5">
+              <div className="grid grid-cols-3 sm:flex sm:flex-wrap items-center gap-x-1 sm:gap-x-1 xl:gap-x-1.5 gap-y-0.5">
                 <MatCheckbox
                   checked={axes.showCo2}
                   onChange={(checked) => setAxes((a) => ({ ...a, showCo2: checked }))}
@@ -1924,6 +2133,31 @@ export const ConsoleView: React.FC<ConsoleViewProps> = ({
                     />
                   </div>
                 </div>
+
+                <span
+                  aria-hidden="true"
+                  className="hidden sm:inline-block h-4 w-px bg-white/[0.12] mx-0.5 shrink-0"
+                />
+
+                <div className="col-span-3 sm:contents">
+                  <div className="pt-1 sm:pt-0 border-t border-white/[0.06] sm:border-t-0 sm:contents">
+                    <MatCheckbox
+                      checked={axes.showAnalytics}
+                      onChange={(checked) => setAxes((a) => ({ ...a, showAnalytics: checked }))}
+                      className="!gap-1 !px-1 shrink-0"
+                      title="Show technical diagnostic series (PM0.3 particle count, estimated TVOC ppb, and raw SGP41 VOC/NOx sensor ticks)"
+                      label={
+                        <span
+                          className={`text-xs whitespace-nowrap ${
+                            axes.showAnalytics ? 'text-[#93c5fd] font-semibold' : 'text-[#9ca3af]'
+                          }`}
+                        >
+                          Analytics
+                        </span>
+                      }
+                    />
+                  </div>
+                </div>
               </div>
             </div>
 
@@ -1974,6 +2208,57 @@ export const ConsoleView: React.FC<ConsoleViewProps> = ({
               </MatButton>
             </div>
           </div>
+
+          {axes.showAnalytics && (
+            <div
+              role="group"
+              aria-label="Analytics technical series"
+              className="rounded-lg bg-[#14171d] border border-white/[0.08] px-2.5 py-1 flex flex-wrap items-center gap-x-1.5 gap-y-0.5"
+            >
+              <span className="text-[11px] font-medium text-[#8f96a6] pr-1 select-none">
+                Analytics:
+              </span>
+              <MatCheckbox
+                checked={axes.showPm003}
+                onChange={(checked) => setAxes((a) => ({ ...a, showPm003: checked }))}
+                className="!gap-1 !px-1 shrink-0"
+                title="Ultrafine particle count ≥0.3 µm from Plantower PMS5003 (counts per 0.1 L of air, ~20–1,700). Renders gaps for archive partitions prior to count logging."
+                label={<span className="text-xs text-yellow-400 whitespace-nowrap">PM0.3 Count</span>}
+              />
+              <MatCheckbox
+                checked={axes.showTvocPpb}
+                onChange={(checked) => setAxes((a) => ({ ...a, showTvocPpb: checked }))}
+                className="!gap-1 !px-1 shrink-0"
+                title="Ethanol-equivalent estimate derived from the TVOC index via Sensirion's conversion; not an absolute concentration"
+                label={<span className="text-xs text-fuchsia-400 whitespace-nowrap">TVOC (ppb)</span>}
+              />
+
+              <span
+                aria-hidden="true"
+                className="hidden sm:inline-block h-4 w-px bg-white/[0.1] mx-1 shrink-0"
+              />
+
+              <div className="flex flex-wrap items-center gap-x-1.5 gap-y-0.5">
+                <span className="text-[11px] font-medium text-[#8f96a6] pr-1 select-none">
+                  Ticks:
+                </span>
+                <MatCheckbox
+                  checked={axes.showTvocTicks}
+                  onChange={(checked) => setAxes((a) => ({ ...a, showTvocTicks: checked }))}
+                  className="!gap-1 !px-1 shrink-0"
+                  title="Raw Sensirion SGP41 VOC sensor ticks (diagnostic MOX signal, not a concentration — drifts with temperature, humidity, and aging). TVOC Index is the normalized value (baseline 100)."
+                  label={<span className="text-xs text-purple-300 whitespace-nowrap">TVOC (ticks)</span>}
+                />
+                <MatCheckbox
+                  checked={axes.showNoxTicks}
+                  onChange={(checked) => setAxes((a) => ({ ...a, showNoxTicks: checked }))}
+                  className="!gap-1 !px-1 shrink-0"
+                  title="Raw Sensirion SGP41 NOx sensor ticks (diagnostic MOX signal, not a concentration — drifts with temperature, humidity, and aging). NOx Index is the normalized value (baseline 1)."
+                  label={<span className="text-xs text-pink-300 whitespace-nowrap">NOx (ticks)</span>}
+                />
+              </div>
+            </div>
+          )}
 
           {showAnalyticsPanel && (
             <div className="rounded-xl bg-[#111318] border border-white/[0.08] p-3.5 sm:p-4 space-y-3.5">
@@ -2217,14 +2502,14 @@ export const ConsoleView: React.FC<ConsoleViewProps> = ({
                 <>
                   <MatDivider />
                   <div className="overflow-x-auto no-scrollbar">
-                    <table className="w-full min-w-[460px] table-fixed text-left text-xs font-mono tabular-nums">
+                    <table className="w-full min-w-[560px] table-fixed text-left text-xs font-mono tabular-nums">
                       <colgroup>
-                        <col className="w-[28%]" />
+                        <col className="w-[26%]" />
                         <col className="w-[14%]" />
                         <col className="w-[14%]" />
                         <col className="w-[14%]" />
                         <col className="w-[14%]" />
-                        <col className="w-[16%]" />
+                        <col className="w-[18%]" />
                       </colgroup>
                       <thead>
                         <tr className="text-[11px] font-sans text-[#8f96a6] border-b border-white/[0.06]">
@@ -2271,16 +2556,28 @@ export const ConsoleView: React.FC<ConsoleViewProps> = ({
                               </span>
                             </td>
                             <td className="py-1.5 px-2 text-right text-[#cbd5e1] whitespace-nowrap">
-                              {row.stats.min.toFixed(1)}
+                              {row.stats.min.toLocaleString(undefined, {
+                                minimumFractionDigits: 1,
+                                maximumFractionDigits: 1,
+                              })}
                             </td>
                             <td className="py-1.5 px-2 text-right text-white font-semibold whitespace-nowrap">
-                              {row.stats.avg.toFixed(1)}
+                              {row.stats.avg.toLocaleString(undefined, {
+                                minimumFractionDigits: 1,
+                                maximumFractionDigits: 1,
+                              })}
                             </td>
                             <td className="py-1.5 px-2 text-right text-[#cbd5e1] whitespace-nowrap">
-                              {row.stats.max.toFixed(1)}
+                              {row.stats.max.toLocaleString(undefined, {
+                                minimumFractionDigits: 1,
+                                maximumFractionDigits: 1,
+                              })}
                             </td>
                             <td className="py-1.5 px-2 text-right text-[#9ca3af] whitespace-nowrap">
-                              {row.stats.stdDev.toFixed(1)}
+                              {row.stats.stdDev.toLocaleString(undefined, {
+                                minimumFractionDigits: 1,
+                                maximumFractionDigits: 1,
+                              })}
                             </td>
                             <td
                               className={`py-1.5 pl-2 text-right whitespace-nowrap ${
@@ -2292,8 +2589,14 @@ export const ConsoleView: React.FC<ConsoleViewProps> = ({
                               }`}
                             >
                               {row.stats.delta > 0
-                                ? `+${row.stats.delta.toFixed(1)}`
-                                : row.stats.delta.toFixed(1)}
+                                ? `+${row.stats.delta.toLocaleString(undefined, {
+                                    minimumFractionDigits: 1,
+                                    maximumFractionDigits: 1,
+                                  })}`
+                                : row.stats.delta.toLocaleString(undefined, {
+                                    minimumFractionDigits: 1,
+                                    maximumFractionDigits: 1,
+                                  })}
                             </td>
                           </tr>
                         ))}

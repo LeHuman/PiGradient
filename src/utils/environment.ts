@@ -62,17 +62,42 @@ export function cToF(tempC: number): number {
   return Math.round(((tempC * 9) / 5 + 32) * 10) / 10;
 }
 
-export function computeRollingAverage(values: number[], windowSize: number): number[] {
+// Sensirion ethanol-equivalent TVOC (ppb) estimate derived from SGP41 TVOC Gas Index
+export function calculateTvocPpb(tvocIndex: number): number | null {
+  if (!Number.isFinite(tvocIndex) || tvocIndex <= 0 || tvocIndex >= 501) {
+    return null;
+  }
+  const ppb = -381.97 * (Math.log(501 - tvocIndex) - 6.24);
+  if (!Number.isFinite(ppb)) return null;
+  return Math.round(ppb * 10) / 10;
+}
+
+export function computeRollingAverage(
+  values: (number | null)[],
+  windowSize: number
+): (number | null)[] {
   if (windowSize <= 1 || values.length === 0) return values;
-  const result: number[] = new Array(values.length);
+  const result: (number | null)[] = new Array(values.length);
   let runningSum = 0;
+  let validCount = 0;
   for (let i = 0; i < values.length; i++) {
-    runningSum += values[i];
-    if (i >= windowSize) {
-      runningSum -= values[i - windowSize];
+    const enter = values[i];
+    if (enter !== null && Number.isFinite(enter)) {
+      runningSum += enter;
+      validCount += 1;
     }
-    const count = Math.min(i + 1, windowSize);
-    result[i] = Math.round((runningSum / count) * 10) / 10;
+    if (i >= windowSize) {
+      const leave = values[i - windowSize];
+      if (leave !== null && Number.isFinite(leave)) {
+        runningSum -= leave;
+        validCount -= 1;
+      }
+    }
+    if (enter === null || !Number.isFinite(enter) || validCount === 0) {
+      result[i] = null;
+    } else {
+      result[i] = Math.round((runningSum / validCount) * 10) / 10;
+    }
   }
   return result;
 }
@@ -85,25 +110,36 @@ export interface SeriesStatsSummary {
   delta: number;
 }
 
-export function computeSeriesStats(values: number[]): SeriesStatsSummary | null {
-  if (values.length === 0) return null;
-  let min = values[0];
-  let max = values[0];
+export function computeSeriesStats(values: (number | null)[]): SeriesStatsSummary | null {
+  let validCount = 0;
+  let min = Infinity;
+  let max = -Infinity;
   let sum = 0;
+  let firstValid = 0;
+  let lastValid = 0;
+
   for (let i = 0; i < values.length; i++) {
     const v = values[i];
+    if (v === null || !Number.isFinite(v)) continue;
+    if (validCount === 0) firstValid = v;
+    lastValid = v;
     if (v < min) min = v;
     if (v > max) max = v;
     sum += v;
+    validCount += 1;
   }
-  const avg = sum / values.length;
+
+  if (validCount === 0) return null;
+  const avg = sum / validCount;
   let sqDiff = 0;
   for (let i = 0; i < values.length; i++) {
-    const d = values[i] - avg;
+    const v = values[i];
+    if (v === null || !Number.isFinite(v)) continue;
+    const d = v - avg;
     sqDiff += d * d;
   }
-  const stdDev = Math.sqrt(sqDiff / values.length);
-  const delta = values[values.length - 1] - values[0];
+  const stdDev = Math.sqrt(sqDiff / validCount);
+  const delta = lastValid - firstValid;
 
   const round1 = (n: number) => Math.round(n * 10) / 10;
   return {

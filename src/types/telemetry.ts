@@ -12,6 +12,7 @@ export interface AirGradientRaw {
   tvoc_raw: number;
   nox_index: number;
   nox_raw: number;
+  pm003_count?: number | null;
   boot_count?: number;
 }
 
@@ -61,6 +62,9 @@ export interface HistoricalPoint {
   rhum_comp: number;
   tvoc_index: number;
   nox_index: number;
+  tvoc_raw?: number;
+  nox_raw?: number;
+  pm003_count?: number | null;
 }
 
 // Exact AirGradient Local Server HTTP API (/config) schema
